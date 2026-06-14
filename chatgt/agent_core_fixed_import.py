@@ -20,6 +20,7 @@ class OllamaAgent:
     def __init__(self, ollama_url: str | None = None, model: str | None = None):
         self.ollama_url = ollama_url or os.getenv("OLLAMA_URL", "http://localhost:11434")
         self.model = model or os.getenv("OLLAMA_MODEL", "gemma4:e2b")
+        self.think_mode = self.parse_think_mode(os.getenv("OLLAMA_THINK", ""))
         self.working_dir = os.getenv("AGENT_WORKDIR", "/agent/workdir")
 
         self.max_iterations = int(os.getenv("AGENT_MAX_ITERATIONS", "8"))
@@ -31,6 +32,49 @@ class OllamaAgent:
         self.max_memory_summary_chars = int(os.getenv("AGENT_MAX_MEMORY_SUMMARY_CHARS", "12000"))
 
         os.makedirs(self.working_dir, exist_ok=True)
+
+    # -------------------------
+    # Thinking mode
+    # -------------------------
+
+    def parse_think_mode(self, value: object) -> object:
+        if value is None:
+            return None
+
+        if isinstance(value, bool):
+            return value
+
+        text = str(value).strip().lower()
+
+        if text in {"", "default", "none", "null"}:
+            return None
+
+        if text in {"true", "on", "yes", "think"}:
+            return True
+
+        if text in {"false", "off", "no", "nothink"}:
+            return False
+
+        if text in {"low", "medium", "high"}:
+            return text
+
+        return None
+
+    def set_think_mode(self, value: object) -> object:
+        self.think_mode = self.parse_think_mode(value)
+        return self.think_mode
+
+    def get_think_mode_label(self) -> str:
+        if self.think_mode is None:
+            return "default"
+
+        if self.think_mode is True:
+            return "think"
+
+        if self.think_mode is False:
+            return "nothink"
+
+        return str(self.think_mode)
 
     # -------------------------
     # Memory
@@ -166,6 +210,7 @@ Rules:
         prompt: str,
         timeout: int | None = None,
         progress_callback: ProgressCallback = None,
+        json_mode: bool = False,
     ) -> str:
         if not self.wait_for_ollama():
             return "Error: Ollama is not responding after waiting"
@@ -180,13 +225,24 @@ Rules:
 
         def request_worker() -> None:
             try:
+                payload = {
+                    "model": self.model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {
+                        "num_predict": int(os.getenv("OLLAMA_NUM_PREDICT", "2048")),
+                    },
+                }
+
+                if json_mode:
+                    payload["format"] = "json"
+
+                if self.think_mode is not None:
+                    payload["think"] = self.think_mode
+
                 response = requests.post(
                     f"{self.ollama_url}/api/generate",
-                    json={
-                        "model": self.model,
-                        "prompt": prompt,
-                        "stream": False,
-                    },
+                    json=payload,
                     timeout=timeout,
                 )
 
@@ -269,6 +325,7 @@ Rules:
                 if name in {
                     ".agent_sessions.json",
                     ".agent_memory_summary.txt",
+                    ".agent_memory_state.json",
                     ".agent_settings.json",
                 }:
                     continue
@@ -487,13 +544,56 @@ Rules:
 
         raise ValueError(f"No valid JSON object found in response: {text[:500]}")
 
+    def build_plain_response_prompt(
+        self,
+        task: str,
+        conversation_context: List[Dict[str, object]] | None = None,
+    ) -> str:
+        memory_summary = self.load_memory_summary()
+
+        conversation_context = conversation_context or []
+        conversation_context_text = json.dumps(
+            conversation_context[-20:],
+            indent=2,
+            ensure_ascii=False,
+        )
+
+        return f"""
+You are responding directly to the user.
+
+Long-term memory summary:
+{memory_summary or "(empty)"}
+
+Recent visible conversation context:
+{conversation_context_text or "[]"}
+
+Current user message:
+{task}
+
+Instructions:
+- Answer directly in plain text.
+- Do not output JSON.
+- Use recent conversation context to resolve references like "it", "that", "continue", "make it rhyme", "rewrite it", etc.
+- If the user asks to transform the previous answer, transform the previous agent answer.
+- Keep the answer complete.
+- For respond, do not include the full answer in JSON. Only return action and summary. The system will generate the final answer separately.
+""".strip()
+
     def build_agent_prompt(
         self,
         task: str,
         history: List[Dict[str, object]],
+        conversation_context: List[Dict[str, object]] | None = None,
     ) -> str:
-        history_text = json.dumps(history[-12:], indent=2)
+        history_text = json.dumps(history[-12:], indent=2, ensure_ascii=False)
         memory_summary = self.load_memory_summary()
+
+        conversation_context = conversation_context or []
+        conversation_context_text = json.dumps(
+            conversation_context[-20:],
+            indent=2,
+            ensure_ascii=False,
+        )
 
         return f"""
 You are a local coding agent running inside a restricted Docker work directory.
@@ -501,13 +601,16 @@ You are a local coding agent running inside a restricted Docker work directory.
 Long-term memory summary:
 {memory_summary or "(empty)"}
 
-User task:
+Recent visible conversation context:
+{conversation_context_text or "[]"}
+
+Current user task:
 {task}
 
 Working directory:
 {self.working_dir}
 
-Previous steps and observations for this task:
+Previous steps and observations for this current task:
 {history_text}
 
 You must respond with exactly one JSON object. No markdown. No explanations outside JSON.
@@ -515,11 +618,10 @@ You must respond with exactly one JSON object. No markdown. No explanations outs
 Available actions:
 
 1. respond
-Use this for greetings, questions, explanations, or anything that does not require file/action work.
+Use this for greetings, questions, explanations, creative writing, rewrites, continuations, or anything that does not require file/action work.
 {{
   "summary": "Short progress update for the user.",
-  "action": "respond",
-  "message": "Direct response to the user."
+  "action": "respond"
 }}
 
 2. list_files
@@ -560,6 +662,8 @@ Use this only after completing an agentic task.
 }}
 
 Rules:
+- Use the recent visible conversation context to resolve references like "it", "that", "make it better", "continue", "change the last answer", etc.
+- If the user asks to transform or continue the previous answer, use the previous agent response from conversation context.
 - Use the long-term memory only when relevant.
 - For normal conversation, use respond.
 - For questions that only need an answer, use respond.
@@ -617,6 +721,7 @@ Rules:
         self,
         task: str,
         progress_callback: ProgressCallback = None,
+        conversation_context: List[Dict[str, object]] | None = None,
     ) -> str:
         history: List[Dict[str, object]] = []
 
@@ -632,7 +737,11 @@ Rules:
         })
 
         for iteration in range(1, self.max_iterations + 1):
-            prompt = self.build_agent_prompt(task, history)
+            prompt = self.build_agent_prompt(
+                task,
+                history,
+                conversation_context=conversation_context,
+            )
 
             emit({
                 "kind": "status",
@@ -644,6 +753,7 @@ Rules:
                 prompt,
                 timeout=self.model_timeout_seconds,
                 progress_callback=progress_callback,
+                json_mode=True,
             )
 
             emit({
@@ -703,7 +813,38 @@ Rules:
                 "text": json.dumps(observation, indent=2),
             })
 
-            if action in {"respond", "finish"}:
+            if action == "respond":
+                emit({
+                    "kind": "status",
+                    "iteration": iteration,
+                    "text": "Generating direct response...",
+                })
+
+                plain_prompt = self.build_plain_response_prompt(
+                    task,
+                    conversation_context=conversation_context,
+                )
+
+                message = self.query_ollama(
+                    plain_prompt,
+                    timeout=self.model_timeout_seconds,
+                    progress_callback=progress_callback,
+                    json_mode=False,
+                )
+
+                history.append({
+                    "iteration": iteration,
+                    "summary": summary,
+                    "action": action,
+                    "observation": {
+                        "success": True,
+                        "message": message[:1000],
+                    },
+                })
+
+                return message
+
+            if action == "finish":
                 message = str(observation.get("message") or action_obj.get("message") or summary)
 
                 history.append({
@@ -762,6 +903,7 @@ Rules:
 
         print("Ollama is ready.")
         print(f"Model: {self.model}")
+        print(f"Thinking mode: {self.get_think_mode_label()}")
         print(f"Working directory: {self.working_dir}")
         print("Type a task, or type 'exit' to quit.")
 

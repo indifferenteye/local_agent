@@ -27,6 +27,9 @@ MEMORY_STATE_FILE = os.path.join(agent.working_dir, ".agent_memory_state.json")
 
 RECENT_MESSAGES_TO_KEEP = int(os.getenv("AGENT_RECENT_MESSAGES_TO_KEEP", "30"))
 SUMMARIZE_AFTER_MESSAGES = int(os.getenv("AGENT_SUMMARIZE_AFTER_MESSAGES", "60"))
+RECENT_CONVERSATION_CONTEXT_MESSAGES = int(
+    os.getenv("AGENT_RECENT_CONVERSATION_CONTEXT_MESSAGES", "20")
+)
 
 messages: List[Dict[str, Any]] = []
 subscribers: List[queue.Queue] = []
@@ -44,6 +47,9 @@ def load_settings() -> None:
                 agent.model = selected_model.strip()
                 print(f"Loaded selected model: {agent.model}")
 
+            agent.set_think_mode(data.get("think_mode"))
+            print(f"Loaded think mode: {agent.get_think_mode_label()}")
+
     except Exception as exc:
         print(f"Could not load settings file: {exc}")
 
@@ -56,6 +62,7 @@ def save_settings() -> None:
             json.dump(
                 {
                     "model": agent.model,
+                    "think_mode": agent.think_mode,
                 },
                 f,
                 indent=2,
@@ -116,6 +123,32 @@ def save_memory_state(state: Dict[str, Any]) -> None:
     except Exception as exc:
         print(f"Could not save memory state file: {exc}")
 
+def get_recent_conversation_context() -> List[Dict[str, Any]]:
+    """
+    Returns recent user/agent messages for conversational continuity.
+
+    This is separate from long-term memory. It lets the model understand
+    follow-ups like "make it rhyme", "change that", "continue", etc.
+    """
+    context = []
+
+    for msg in messages:
+        role = str(msg.get("role", ""))
+        text = str(msg.get("text", ""))
+
+        if role not in {"user", "agent"}:
+            continue
+
+        if not text.strip():
+            continue
+
+        context.append({
+            "role": role,
+            "text": text[:6000],
+            "timestamp": msg.get("timestamp"),
+        })
+
+    return context[-RECENT_CONVERSATION_CONTEXT_MESSAGES:]
 
 def compact_message_for_memory(msg: Dict[str, Any]) -> Dict[str, Any] | None:
     role = str(msg.get("role", ""))
@@ -148,7 +181,6 @@ def maybe_summarize_memory() -> None:
     state = load_memory_state()
     summarized_until_index = int(state.get("summarized_until_index", 0))
 
-    # Do not summarize the most recent N messages, so the active context remains fresh.
     summarize_until_index = max(0, len(messages) - RECENT_MESSAGES_TO_KEEP)
 
     if summarize_until_index <= summarized_until_index:
@@ -175,7 +207,6 @@ def maybe_summarize_memory() -> None:
         state["summarized_until_index"] = summarize_until_index
         save_memory_state(state)
 
-        # Important: keep all visible messages.
         save_messages()
 
         print(
@@ -276,6 +307,67 @@ HTML = """
 
         .model-select:disabled {
             opacity: 0.5;
+        }
+
+        .modal-backdrop {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.65);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            padding: 20px;
+        }
+
+        .modal-backdrop[hidden] {
+            display: none;
+        }
+
+        .modal {
+            width: min(720px, 96vw);
+            max-height: 86vh;
+            overflow: auto;
+            background: #151d26;
+            border: 1px solid #2b3a4b;
+            border-radius: 16px;
+            box-shadow: 0 16px 60px rgba(0, 0, 0, 0.45);
+        }
+
+        .modal-header {
+            padding: 14px;
+            border-bottom: 1px solid #2b3a4b;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .modal-body {
+            padding: 14px;
+            color: #d7e2ee;
+        }
+
+        .modal-body table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 12px;
+        }
+
+        .modal-body th,
+        .modal-body td {
+            text-align: left;
+            vertical-align: top;
+            padding: 8px;
+            border-bottom: 1px solid #283747;
+        }
+
+        .modal-body code {
+            background: #080d12;
+            border: 1px solid #202b38;
+            border-radius: 6px;
+            padding: 2px 5px;
+            color: #f3f7fb;
         }
 
         .meta {
@@ -491,12 +583,61 @@ HTML = """
         <div class="header-actions">
             <label class="model-label" for="modelSelect">Model</label>
             <select class="model-select" id="modelSelect"></select>
+            <button class="small-button" id="help">Help</button>
             <button class="small-button" id="clear">Clear chat</button>
         </div>
     </header>
 
+    <div class="modal-backdrop" id="helpModal" hidden>
+        <div class="modal">
+            <div class="modal-header">
+                <strong>Available commands</strong>
+                <button class="small-button" id="closeHelp">Close</button>
+            </div>
+
+            <div class="modal-body">
+                <table>
+                    <tr>
+                        <th>Command</th>
+                        <th>Effect</th>
+                    </tr>
+                    <tr>
+                        <td><code>/help</code></td>
+                        <td>Show available commands.</td>
+                    </tr>
+                    <tr>
+                        <td><code>/set think</code></td>
+                        <td>Enable model thinking if supported.</td>
+                    </tr>
+                    <tr>
+                        <td><code>/set nothink</code></td>
+                        <td>Disable model thinking if supported.</td>
+                    </tr>
+                    <tr>
+                        <td><code>/set think low</code></td>
+                        <td>Use low thinking effort if supported.</td>
+                    </tr>
+                    <tr>
+                        <td><code>/set think medium</code></td>
+                        <td>Use medium thinking effort if supported.</td>
+                    </tr>
+                    <tr>
+                        <td><code>/set think high</code></td>
+                        <td>Use high thinking effort if supported.</td>
+                    </tr>
+                    <tr>
+                        <td><code>/set think default</code></td>
+                        <td>Use Ollama/model default behavior.</td>
+                    </tr>
+                </table>
+
+                <p>Note: not every Ollama model supports thinking options.</p>
+            </div>
+        </div>
+    </div>
+
     <div class="meta" id="meta">
-        Model: {{ model }} | Workdir: {{ workdir }}
+        Model: {{ model }} | Think: {{ think_mode }} | Workdir: {{ workdir }}
     </div>
 
     <main id="chat"></main>
@@ -512,6 +653,9 @@ HTML = """
         const taskInput = document.getElementById("task");
         const sendButton = document.getElementById("send");
         const clearButton = document.getElementById("clear");
+        const helpButton = document.getElementById("help");
+        const helpModal = document.getElementById("helpModal");
+        const closeHelpButton = document.getElementById("closeHelp");
         const modelSelect = document.getElementById("modelSelect");
         const meta = document.getElementById("meta");
 
@@ -713,7 +857,10 @@ HTML = """
                     modelSelect.disabled = true;
                 }
 
-                meta.textContent = "Model: " + data.current_model + " | Workdir: " + data.workdir;
+                meta.textContent =
+                    "Model: " + data.current_model +
+                    " | Think: " + data.think_mode +
+                    " | Workdir: " + data.workdir;
 
             } catch (err) {
                 console.error("Could not load models:", err);
@@ -731,7 +878,10 @@ HTML = """
                 modelSelect.disabled = data.running === true;
 
                 if (data.model) {
-                    meta.textContent = "Model: " + data.model + " | Workdir: " + data.workdir;
+                    meta.textContent =
+                        "Model: " + data.model +
+                        " | Think: " + data.think_mode +
+                        " | Workdir: " + data.workdir;
                 }
             } catch (err) {
                 console.error("Could not load messages:", err);
@@ -821,6 +971,26 @@ HTML = """
             }
         });
 
+        helpButton.addEventListener("click", () => {
+            helpModal.hidden = false;
+        });
+
+        closeHelpButton.addEventListener("click", () => {
+            helpModal.hidden = true;
+        });
+
+        helpModal.addEventListener("click", (e) => {
+            if (e.target === helpModal) {
+                helpModal.hidden = true;
+            }
+        });
+
+        document.addEventListener("keydown", (e) => {
+            if (e.key === "Escape") {
+                helpModal.hidden = true;
+            }
+        });
+
         clearButton.addEventListener("click", async () => {
             if (!confirm("Clear the visible saved chat history? This will not clear the long-term memory summary.")) return;
 
@@ -899,11 +1069,92 @@ def broadcast(role: str, text: str) -> None:
     })
 
 
+def slash_command_help_text() -> str:
+    return """Available commands:
+
+/help
+Show available commands.
+
+/set think
+Enable model thinking if the selected model supports it.
+
+/set nothink
+Disable model thinking if the selected model supports it.
+
+/set think low
+Use low thinking effort if the selected model supports it.
+
+/set think medium
+Use medium thinking effort if the selected model supports it.
+
+/set think high
+Use high thinking effort if the selected model supports it.
+
+/set think default
+Use Ollama/model default behavior.
+"""
+
+
+def handle_slash_command(task: str) -> bool:
+    command = task.strip()
+    command_lower = command.lower()
+
+    if not command_lower.startswith("/"):
+        return False
+
+    broadcast("user", command)
+
+    if command_lower in {"/help", "/commands"}:
+        broadcast("agent", slash_command_help_text())
+        return True
+
+    if command_lower == "/set nothink":
+        agent.set_think_mode(False)
+        save_settings()
+        broadcast("agent", "Thinking disabled. Current mode: nothink.")
+        broadcast("status", "settings changed")
+        return True
+
+    if command_lower == "/set think":
+        agent.set_think_mode(True)
+        save_settings()
+        broadcast("agent", "Thinking enabled. Current mode: think.")
+        broadcast("status", "settings changed")
+        return True
+
+    if command_lower.startswith("/set think "):
+        value = command_lower.replace("/set think ", "", 1).strip()
+
+        if value in {"low", "medium", "high"}:
+            agent.set_think_mode(value)
+            save_settings()
+            broadcast("agent", f"Thinking mode set to {value}.")
+            broadcast("status", "settings changed")
+            return True
+
+        if value in {"default", "none", "null"}:
+            agent.set_think_mode(None)
+            save_settings()
+            broadcast("agent", "Thinking mode reset to Ollama/model default.")
+            broadcast("status", "settings changed")
+            return True
+
+        broadcast(
+            "agent",
+            "Unknown thinking mode. Use: /set think, /set nothink, /set think low, /set think medium, /set think high, or /set think default.",
+        )
+        return True
+
+    broadcast("agent", "Unknown command. Type /help to see available commands.")
+    return True
+
+
 @app.route("/")
 def index():
     return render_template_string(
         HTML,
         model=agent.model,
+        think_mode=agent.get_think_mode_label(),
         workdir=agent.working_dir,
     )
 
@@ -914,6 +1165,7 @@ def get_messages():
         "messages": messages,
         "running": running,
         "model": agent.model,
+        "think_mode": agent.get_think_mode_label(),
         "workdir": agent.working_dir,
     })
 
@@ -925,6 +1177,7 @@ def get_models():
     return jsonify({
         "models": models,
         "current_model": agent.model,
+        "think_mode": agent.get_think_mode_label(),
         "workdir": agent.working_dir,
     })
 
@@ -961,6 +1214,7 @@ def set_model():
 
     return jsonify({
         "model": agent.model,
+        "think_mode": agent.get_think_mode_label(),
     })
 
 
@@ -994,6 +1248,11 @@ def run_task():
     if not task:
         return jsonify({"error": "Missing task"}), 400
 
+    if task.startswith("/"):
+        handled = handle_slash_command(task)
+        if handled:
+            return jsonify({"handled": True})
+
     if running:
         return jsonify({"error": "Task already running"}), 409
 
@@ -1008,7 +1267,13 @@ def run_task():
                 def progress(event: Any) -> None:
                     broadcast_message(normalize_progress_event(event))
 
-                final = agent.run_agentic_task(task, progress_callback=progress)
+                conversation_context = get_recent_conversation_context()
+
+                final = agent.run_agentic_task(
+                    task,
+                    progress_callback=progress,
+                    conversation_context=conversation_context,
+                )
                 broadcast("agent", final)
 
                 maybe_summarize_memory()
