@@ -520,10 +520,6 @@ Rules:
                 "returncode": -1,
             }
 
-    # -------------------------
-    # Agent loop
-    # -------------------------
-
     def extract_json_object(self, text: str) -> Dict[str, object]:
         text = text.strip()
 
@@ -544,16 +540,81 @@ Rules:
 
         raise ValueError(f"No valid JSON object found in response: {text[:500]}")
 
+    def format_observation_for_user(self, action: str, observation: Dict[str, object]) -> str:
+        if not observation.get("success"):
+            return f"Action failed: {observation.get('error', 'Unknown error')}"
+
+        if action == "list_files":
+            entries = observation.get("entries", [])
+
+            if not isinstance(entries, list):
+                return "I listed the path, but the result format was unexpected."
+
+            if not entries:
+                return "I can see the work directory, but it is empty."
+
+            lines = ["I can see these files and folders:"]
+
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+
+                name = entry.get("name", "")
+                item_type = entry.get("type", "item")
+                size = entry.get("size")
+
+                if item_type == "directory":
+                    lines.append(f"- `{name}/` folder")
+                else:
+                    if size is None:
+                        lines.append(f"- `{name}` file")
+                    else:
+                        lines.append(f"- `{name}` file, {size} bytes")
+
+            return "\n".join(lines)
+
+        if action == "read_file":
+            filename = observation.get("filename", "the file")
+            content = observation.get("content", "")
+
+            return f"Contents of `{filename}`:\n\n{content}"
+
+        if action == "run_command":
+            stdout = str(observation.get("stdout", "")).strip()
+            stderr = str(observation.get("stderr", "")).strip()
+
+            if stdout and stderr:
+                return f"Command output:\n\n{stdout}\n\nErrors:\n\n{stderr}"
+
+            if stdout:
+                return f"Command output:\n\n{stdout}"
+
+            if stderr:
+                return f"Command produced errors:\n\n{stderr}"
+
+            return "The command completed successfully with no output."
+
+        return json.dumps(observation, indent=2, ensure_ascii=False)
+
     def build_plain_response_prompt(
         self,
         task: str,
         conversation_context: List[Dict[str, object]] | None = None,
+        current_task_history: List[Dict[str, object]] | None = None,
     ) -> str:
         memory_summary = self.load_memory_summary()
 
         conversation_context = conversation_context or []
+        current_task_history = current_task_history or []
+
         conversation_context_text = json.dumps(
             conversation_context[-20:],
+            indent=2,
+            ensure_ascii=False,
+        )
+
+        current_task_history_text = json.dumps(
+            current_task_history[-12:],
             indent=2,
             ensure_ascii=False,
         )
@@ -567,16 +628,20 @@ Long-term memory summary:
 Recent visible conversation context:
 {conversation_context_text or "[]"}
 
+Current task tool/action history:
+{current_task_history_text or "[]"}
+
 Current user message:
 {task}
 
 Instructions:
 - Answer directly in plain text.
 - Do not output JSON.
+- Use the current task tool/action history when it contains relevant results.
+- If a tool result says files were found, report those files. Do not claim you cannot access files.
 - Use recent conversation context to resolve references like "it", "that", "continue", "make it rhyme", "rewrite it", etc.
 - If the user asks to transform the previous answer, transform the previous agent answer.
 - Keep the answer complete.
-- For respond, do not include the full answer in JSON. Only return action and summary. The system will generate the final answer separately.
 """.strip()
 
     def build_agent_prompt(
@@ -724,6 +789,7 @@ Rules:
         conversation_context: List[Dict[str, object]] | None = None,
     ) -> str:
         history: List[Dict[str, object]] = []
+        successful_action_counts: Dict[str, int] = {}
 
         def emit(event: ProgressEvent) -> None:
             if progress_callback:
@@ -823,6 +889,7 @@ Rules:
                 plain_prompt = self.build_plain_response_prompt(
                     task,
                     conversation_context=conversation_context,
+                    current_task_history=history,
                 )
 
                 message = self.query_ollama(
@@ -872,6 +939,41 @@ Rules:
                 },
                 "observation": compact_observation,
             })
+            action_signature = json.dumps(
+                {
+                    "action": action,
+                    "input": {
+                        k: v for k, v in action_obj.items()
+                        if k not in {"summary", "content"}
+                    },
+                },
+                sort_keys=True,
+                ensure_ascii=False,
+            )
+
+            if observation.get("success"):
+                successful_action_counts[action_signature] = (
+                    successful_action_counts.get(action_signature, 0) + 1
+                )
+
+                if successful_action_counts[action_signature] >= 2:
+                    return self.format_observation_for_user(action, observation)
+
+            if action == "list_files" and observation.get("success"):
+                task_lower = task.lower()
+
+                if any(
+                    phrase in task_lower
+                    for phrase in [
+                        "what files",
+                        "which files",
+                        "files and folders",
+                        "can you see",
+                        "list files",
+                        "show files",
+                    ]
+                ):
+                    return self.format_observation_for_user(action, observation)
 
             if action == "write_file" and observation.get("success"):
                 filename = observation.get("filename", "the file")
