@@ -27,7 +27,96 @@ class OllamaAgent:
         self.model_timeout_seconds = int(os.getenv("AGENT_MODEL_TIMEOUT_SECONDS", "240"))
         self.heartbeat_seconds = int(os.getenv("AGENT_HEARTBEAT_SECONDS", "5"))
 
+        self.memory_summary_file = os.path.join(self.working_dir, ".agent_memory_summary.txt")
+        self.max_memory_summary_chars = int(os.getenv("AGENT_MAX_MEMORY_SUMMARY_CHARS", "12000"))
+
         os.makedirs(self.working_dir, exist_ok=True)
+
+    # -------------------------
+    # Memory
+    # -------------------------
+
+    def load_memory_summary(self) -> str:
+        try:
+            if os.path.exists(self.memory_summary_file):
+                with open(self.memory_summary_file, "r", encoding="utf-8") as f:
+                    return f.read().strip()
+        except Exception:
+            pass
+
+        return ""
+
+    def save_memory_summary(self, summary: str) -> None:
+        summary = summary.strip()
+
+        if len(summary) > self.max_memory_summary_chars:
+            summary = summary[-self.max_memory_summary_chars :]
+
+        os.makedirs(os.path.dirname(self.memory_summary_file), exist_ok=True)
+
+        with open(self.memory_summary_file, "w", encoding="utf-8") as f:
+            f.write(summary + "\n")
+
+    def summarize_conversation_memory(
+        self,
+        existing_summary: str,
+        messages_to_summarize: List[Dict[str, object]],
+    ) -> str:
+        compact_messages = []
+
+        for msg in messages_to_summarize:
+            role = str(msg.get("role", ""))
+            text = str(msg.get("text", ""))
+
+            if role == "progress":
+                continue
+
+            if role == "status":
+                continue
+
+            if not text.strip():
+                continue
+
+            compact_messages.append({
+                "role": role,
+                "text": text[:3000],
+            })
+
+        if not compact_messages:
+            return existing_summary
+
+        prompt = f"""
+You are maintaining long-term memory for a local coding agent.
+
+Existing memory summary:
+{existing_summary or "(empty)"}
+
+New conversation messages to integrate:
+{json.dumps(compact_messages, indent=2, ensure_ascii=False)}
+
+Create an updated compact memory summary.
+
+Rules:
+- Keep only useful durable information.
+- Remember user preferences, ongoing project details, important files created or edited, important bugs/fixes, and decisions.
+- Do not include raw model JSON.
+- Do not include repetitive progress logs.
+- Do not include huge file contents.
+- Keep it concise but useful for future tasks.
+- Return only the updated memory summary as plain text.
+""".strip()
+
+        summary = self.query_ollama(prompt, timeout=self.model_timeout_seconds)
+
+        if summary.startswith("Error"):
+            return existing_summary
+
+        summary = summary.strip()
+
+        if len(summary) > self.max_memory_summary_chars:
+            summary = summary[-self.max_memory_summary_chars :]
+
+        return summary
 
     # -------------------------
     # Ollama
@@ -158,6 +247,9 @@ class OllamaAgent:
             for name in sorted(os.listdir(target)):
                 full = os.path.join(target, name)
                 rel = os.path.relpath(full, self.working_dir)
+
+                if name in {".agent_sessions.json", ".agent_memory_summary.txt"}:
+                    continue
 
                 entries.append({
                     "name": name,
@@ -379,9 +471,13 @@ class OllamaAgent:
         history: List[Dict[str, object]],
     ) -> str:
         history_text = json.dumps(history[-12:], indent=2)
+        memory_summary = self.load_memory_summary()
 
         return f"""
 You are a local coding agent running inside a restricted Docker work directory.
+
+Long-term memory summary:
+{memory_summary or "(empty)"}
 
 User task:
 {task}
@@ -389,7 +485,7 @@ User task:
 Working directory:
 {self.working_dir}
 
-Previous steps and observations:
+Previous steps and observations for this task:
 {history_text}
 
 You must respond with exactly one JSON object. No markdown. No explanations outside JSON.
@@ -442,6 +538,7 @@ Use this only after completing an agentic task.
 }}
 
 Rules:
+- Use the long-term memory only when relevant.
 - For normal conversation, use respond.
 - For questions that only need an answer, use respond.
 - For coding/file tasks, work step by step.
@@ -450,7 +547,7 @@ Rules:
 - After a successful write_file, usually finish immediately unless the user explicitly asked you to test, inspect, or refine the result.
 - Do not rewrite the same file repeatedly unless the previous observation showed an error.
 - Do not use shell redirection, heredocs, pipes, backticks, ampersands, or destructive commands.
-- If modifying an existing file, read it first unless its content is already in the history.
+- If modifying an existing file, read it first unless its content is already in the task history.
 - For HTML tasks, write a complete standalone HTML file.
 - Finish only when the task is actually complete.
 - The user should always receive a useful message, not only "Task completed."

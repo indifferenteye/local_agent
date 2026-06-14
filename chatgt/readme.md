@@ -17,7 +17,9 @@ docker run -it --rm `
   -e OLLAMA_URL="http://host.docker.internal:11434" `
   -e OLLAMA_MODEL="gemma4:e2b" `
   -e AGENT_WORKDIR="/agent/workdir" `
-  -e AGENT_MAX_ITERATIONS="20" `
+  -e AGENT_MAX_ITERATIONS="8" `
+  -e AGENT_SUMMARIZE_AFTER_MESSAGES="60" `
+  -e AGENT_RECENT_MESSAGES_TO_KEEP="30" `
   ollama-agent
 
 ==
