@@ -15,7 +15,6 @@ from agent_core_fixed_import import OllamaAgent
 
 app = Flask(__name__)
 
-# Hide noisy Flask request logs like: GET /messages 200
 log = logging.getLogger("werkzeug")
 log.setLevel(logging.ERROR)
 
@@ -23,6 +22,9 @@ agent = OllamaAgent()
 agent_lock = threading.Lock()
 
 SESSION_FILE = os.path.join(agent.working_dir, ".agent_sessions.json")
+
+RECENT_MESSAGES_TO_KEEP = int(os.getenv("AGENT_RECENT_MESSAGES_TO_KEEP", "30"))
+SUMMARIZE_AFTER_MESSAGES = int(os.getenv("AGENT_SUMMARIZE_AFTER_MESSAGES", "60"))
 
 messages: List[Dict[str, Any]] = []
 subscribers: List[queue.Queue] = []
@@ -54,6 +56,60 @@ def save_messages() -> None:
         print(f"Could not save session file: {exc}")
 
 
+def compact_message_for_memory(msg: Dict[str, Any]) -> Dict[str, Any] | None:
+    role = str(msg.get("role", ""))
+    text = str(msg.get("text", ""))
+
+    if role in {"progress", "status"}:
+        return None
+
+    if not text.strip():
+        return None
+
+    return {
+        "role": role,
+        "text": text[:3000],
+        "timestamp": msg.get("timestamp"),
+    }
+
+
+def maybe_summarize_and_trim_memory() -> None:
+    global messages
+
+    if len(messages) <= SUMMARIZE_AFTER_MESSAGES:
+        return
+
+    old_messages = messages[:-RECENT_MESSAGES_TO_KEEP]
+    recent_messages = messages[-RECENT_MESSAGES_TO_KEEP:]
+
+    memory_candidates = []
+    for msg in old_messages:
+        compact = compact_message_for_memory(msg)
+        if compact:
+            memory_candidates.append(compact)
+
+    if not memory_candidates:
+        messages = recent_messages
+        save_messages()
+        return
+
+    try:
+        existing_summary = agent.load_memory_summary()
+        updated_summary = agent.summarize_conversation_memory(existing_summary, memory_candidates)
+        agent.save_memory_summary(updated_summary)
+
+        messages = recent_messages
+        save_messages()
+
+        print(
+            f"Summarized {len(memory_candidates)} messages. "
+            f"Kept {len(messages)} recent messages."
+        )
+
+    except Exception as exc:
+        print(f"Memory summarization failed: {exc}")
+
+
 load_messages()
 
 
@@ -65,18 +121,28 @@ HTML = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Local Ollama Agent</title>
     <style>
+        * {
+            box-sizing: border-box;
+        }
+
         :root {
             color-scheme: dark;
             font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         }
 
+        html,
         body {
             margin: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
             background: #101418;
             color: #f3f7fb;
-            height: 100vh;
-            display: flex;
-            flex-direction: column;
+        }
+
+        body {
+            display: grid;
+            grid-template-rows: auto auto 1fr auto;
         }
 
         header {
@@ -88,12 +154,14 @@ HTML = """
             justify-content: space-between;
             align-items: center;
             gap: 12px;
+            min-height: 52px;
         }
 
         .header-actions {
             display: flex;
             gap: 8px;
             align-items: center;
+            flex-shrink: 0;
         }
 
         .small-button {
@@ -104,6 +172,7 @@ HTML = """
             font-size: 12px;
             background: #101820;
             color: #d7e2ee;
+            cursor: pointer;
         }
 
         .small-button:hover {
@@ -113,49 +182,65 @@ HTML = """
         .meta {
             font-size: 12px;
             color: #9fb0c2;
-            padding: 0 16px 10px;
+            padding: 8px 16px 10px;
             background: #18212b;
             border-bottom: 1px solid #263241;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
 
         #chat {
-            flex: 1;
+            min-height: 0;
             overflow-y: auto;
             padding: 16px;
+            display: block;
+        }
+
+        .row {
+            width: 100%;
             display: flex;
-            flex-direction: column;
-            gap: 12px;
+            margin-bottom: 12px;
+            clear: both;
+        }
+
+        .row.user-row {
+            justify-content: flex-end;
+        }
+
+        .row.agent-row,
+        .row.progress-row {
+            justify-content: flex-start;
         }
 
         .msg {
-            max-width: 920px;
+            max-width: min(920px, 92vw);
             padding: 12px 14px;
             border-radius: 14px;
             line-height: 1.45;
             white-space: pre-wrap;
+            overflow-wrap: anywhere;
             word-break: break-word;
         }
 
         .user {
-            align-self: flex-end;
             background: #255d3d;
         }
 
         .agent {
-            align-self: flex-start;
             background: #1f2a36;
             border: 1px solid #314153;
         }
 
         .progress-group {
-            align-self: flex-start;
-            max-width: 920px;
-            width: min(920px, 100%);
+            width: min(920px, 92vw);
+            min-width: min(420px, 92vw);
             border-radius: 14px;
             background: #151d26;
             border: 1px solid #2b3a4b;
             color: #c8d6e5;
             overflow: hidden;
+            display: block;
         }
 
         .progress-group > summary {
@@ -163,6 +248,9 @@ HTML = """
             padding: 10px 14px;
             user-select: none;
             font-size: 14px;
+            min-height: 40px;
+            display: block;
+            overflow-wrap: anywhere;
         }
 
         .progress-content {
@@ -176,6 +264,7 @@ HTML = """
             border-radius: 10px;
             background: #101820;
             overflow: hidden;
+            display: block;
         }
 
         .step > summary {
@@ -183,6 +272,9 @@ HTML = """
             padding: 9px 10px;
             font-size: 13px;
             color: #d7e2ee;
+            min-height: 34px;
+            display: block;
+            overflow-wrap: anywhere;
         }
 
         .step-body {
@@ -206,6 +298,7 @@ HTML = """
             overflow: auto;
             max-height: 280px;
             white-space: pre-wrap;
+            overflow-wrap: anywhere;
             word-break: break-word;
             font-size: 12px;
         }
@@ -220,6 +313,7 @@ HTML = """
             padding: 12px;
             background: #18212b;
             border-top: 1px solid #263241;
+            min-height: 72px;
         }
 
         textarea {
@@ -233,6 +327,7 @@ HTML = """
             color: #f3f7fb;
             padding: 10px;
             font: inherit;
+            min-width: 0;
         }
 
         button {
@@ -243,10 +338,33 @@ HTML = """
             font-weight: 700;
             background: #32a852;
             color: white;
+            cursor: pointer;
+            flex-shrink: 0;
         }
 
         button:disabled {
             opacity: 0.5;
+            cursor: default;
+        }
+
+        @media (max-width: 640px) {
+            #chat {
+                padding: 10px;
+            }
+
+            .msg,
+            .progress-group {
+                max-width: 96vw;
+                width: 96vw;
+            }
+
+            form {
+                padding: 10px;
+            }
+
+            button {
+                padding: 0 12px;
+            }
         }
     </style>
 </head>
@@ -276,17 +394,31 @@ HTML = """
         const sendButton = document.getElementById("send");
         const clearButton = document.getElementById("clear");
 
-        let lastRenderedCount = -1;
+        let lastRenderedSignature = "";
+        let renderTimer = null;
 
-        function scrollToBottom() {
-            chat.scrollTop = chat.scrollHeight;
+        function scrollToBottomSoon() {
+            requestAnimationFrame(() => {
+                chat.scrollTop = chat.scrollHeight;
+                requestAnimationFrame(() => {
+                    chat.scrollTop = chat.scrollHeight;
+                });
+            });
+        }
+
+        function makeRow(kind) {
+            const row = document.createElement("div");
+            row.className = "row " + kind + "-row";
+            return row;
         }
 
         function addMessageElement(role, text) {
+            const row = makeRow(role === "user" ? "user" : "agent");
             const div = document.createElement("div");
             div.className = "msg " + role;
             div.textContent = text;
-            chat.appendChild(div);
+            row.appendChild(div);
+            chat.appendChild(row);
         }
 
         function makePre(text, extraClass) {
@@ -297,6 +429,8 @@ HTML = """
         }
 
         function addProgressGroup(progressItems) {
+            const row = makeRow("progress");
+
             const details = document.createElement("details");
             details.className = "progress-group";
             details.open = false;
@@ -367,16 +501,28 @@ HTML = """
 
             details.appendChild(summary);
             details.appendChild(content);
-            chat.appendChild(details);
+            row.appendChild(details);
+            chat.appendChild(row);
         }
 
-        function renderMessages(messages) {
-            if (messages.length === lastRenderedCount) {
+        function getRenderSignature(messages, running) {
+            if (!messages || messages.length === 0) {
+                return "empty:" + running;
+            }
+
+            const last = messages[messages.length - 1];
+            return messages.length + ":" + running + ":" + last.role + ":" + last.timestamp + ":" + String(last.text || "").length;
+        }
+
+        function renderMessages(messages, running) {
+            const signature = getRenderSignature(messages, running);
+
+            if (signature === lastRenderedSignature) {
                 return;
             }
 
             const wasNearBottom =
-                chat.scrollTop + chat.clientHeight >= chat.scrollHeight - 80;
+                chat.scrollTop + chat.clientHeight >= chat.scrollHeight - 120;
 
             chat.innerHTML = "";
 
@@ -397,17 +543,27 @@ HTML = """
                     continue;
                 }
 
-                addMessageElement(msg.role, msg.text);
+                addMessageElement(msg.role, msg.text || "");
             }
 
             if (pendingProgress.length > 0) {
                 addProgressGroup(pendingProgress);
             }
 
-            lastRenderedCount = messages.length;
+            lastRenderedSignature = signature;
 
-            if (wasNearBottom) {
-                scrollToBottom();
+            // Always scroll down while a task is running or when user is near bottom.
+            if (running || wasNearBottom) {
+                scrollToBottomSoon();
+            }
+
+            // Force a layout recalculation. This fixes browser quirks with collapsed <details>.
+            chat.style.display = "none";
+            chat.offsetHeight;
+            chat.style.display = "block";
+
+            if (running || wasNearBottom) {
+                scrollToBottomSoon();
             }
         }
 
@@ -415,11 +571,20 @@ HTML = """
             try {
                 const res = await fetch("/messages", { cache: "no-store" });
                 const data = await res.json();
-                renderMessages(data.messages);
+                renderMessages(data.messages || [], data.running === true);
                 sendButton.disabled = data.running === true;
             } catch (err) {
                 console.error("Could not load messages:", err);
             }
+        }
+
+        function scheduleLoadMessages() {
+            if (renderTimer) return;
+
+            renderTimer = setTimeout(async () => {
+                renderTimer = null;
+                await loadMessages();
+            }, 100);
         }
 
         setInterval(loadMessages, 1000);
@@ -428,7 +593,7 @@ HTML = """
             const events = new EventSource("/events");
 
             events.onmessage = () => {
-                loadMessages();
+                scheduleLoadMessages();
             };
 
             events.onerror = () => {
@@ -468,11 +633,11 @@ HTML = """
         });
 
         clearButton.addEventListener("click", async () => {
-            if (!confirm("Clear the saved chat history?")) return;
+            if (!confirm("Clear the saved chat history? This will not clear the long-term memory summary.")) return;
 
             try {
                 await fetch("/clear", { method: "POST" });
-                lastRenderedCount = -1;
+                lastRenderedSignature = "";
                 await loadMessages();
             } catch (err) {
                 console.error("Clear failed:", err);
@@ -484,6 +649,11 @@ HTML = """
                 e.preventDefault();
                 form.requestSubmit();
             }
+        });
+
+        window.addEventListener("resize", () => {
+            lastRenderedSignature = "";
+            loadMessages();
         });
 
         loadMessages();
@@ -602,6 +772,9 @@ def run_task():
 
                 final = agent.run_agentic_task(task, progress_callback=progress)
                 broadcast("agent", final)
+
+                maybe_summarize_and_trim_memory()
+
         finally:
             running = False
             broadcast("status", "idle")
@@ -623,6 +796,19 @@ def clear_messages():
     return jsonify({"cleared": True})
 
 
+@app.route("/memory")
+def get_memory():
+    return jsonify({
+        "summary": agent.load_memory_summary(),
+    })
+
+
+@app.route("/clear-memory", methods=["POST"])
+def clear_memory():
+    agent.save_memory_summary("")
+    return jsonify({"cleared": True})
+
+
 if __name__ == "__main__":
     print("Testing Ollama connection...")
 
@@ -630,5 +816,6 @@ if __name__ == "__main__":
         print("Warning: Ollama is not reachable yet.")
 
     print(f"Session file: {SESSION_FILE}")
+    print(f"Memory summary file: {agent.memory_summary_file}")
     print("Starting web app on http://0.0.0.0:8080")
     app.run(host="0.0.0.0", port=8080, threaded=True)
