@@ -7,12 +7,13 @@ import shlex
 import subprocess
 import threading
 import time
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Union
 
 import requests
 
 
-ProgressCallback = Optional[Callable[[str], None]]
+ProgressEvent = Union[str, Dict[str, object]]
+ProgressCallback = Optional[Callable[[ProgressEvent], None]]
 
 
 class OllamaAgent:
@@ -112,7 +113,10 @@ class OllamaAgent:
                 break
 
             if progress_callback:
-                progress_callback(f"Model is still generating... {elapsed}s")
+                progress_callback({
+                    "kind": "heartbeat",
+                    "text": f"Model is still generating... {elapsed}s",
+                })
 
         thread.join(timeout=1)
 
@@ -443,6 +447,8 @@ Rules:
 - For coding/file tasks, work step by step.
 - Give a useful short summary on every iteration.
 - Prefer write_file for creating or editing files.
+- After a successful write_file, usually finish immediately unless the user explicitly asked you to test, inspect, or refine the result.
+- Do not rewrite the same file repeatedly unless the previous observation showed an error.
 - Do not use shell redirection, heredocs, pipes, backticks, ampersands, or destructive commands.
 - If modifying an existing file, read it first unless its content is already in the history.
 - For HTML tasks, write a complete standalone HTML file.
@@ -495,27 +501,44 @@ Rules:
     ) -> str:
         history: List[Dict[str, object]] = []
 
-        def emit(message: str) -> None:
+        def emit(event: ProgressEvent) -> None:
             if progress_callback:
-                progress_callback(message)
+                progress_callback(event)
             else:
-                print(message)
+                print(event if isinstance(event, str) else json.dumps(event, indent=2))
 
-        emit(f"Task started: {task}")
+        emit({
+            "kind": "status",
+            "text": f"Task started: {task}",
+        })
 
         for iteration in range(1, self.max_iterations + 1):
             prompt = self.build_agent_prompt(task, history)
 
-            emit(f"{iteration}. Calling model for next action...")
+            emit({
+                "kind": "status",
+                "iteration": iteration,
+                "text": f"{iteration}. Calling model for next action...",
+            })
+
             raw_response = self.query_ollama(
                 prompt,
                 timeout=self.model_timeout_seconds,
                 progress_callback=progress_callback,
             )
-            emit(f"{iteration}. Model responded.")
+
+            emit({
+                "kind": "model_output",
+                "iteration": iteration,
+                "text": raw_response,
+            })
 
             if raw_response.startswith("Error"):
-                emit(raw_response)
+                emit({
+                    "kind": "error",
+                    "iteration": iteration,
+                    "text": raw_response,
+                })
                 return raw_response
 
             try:
@@ -534,16 +557,34 @@ Rules:
                     "observation": observation,
                 })
 
-                emit(f"{iteration}. The model returned invalid JSON. Retrying.")
+                emit({
+                    "kind": "observation",
+                    "iteration": iteration,
+                    "summary": "Invalid JSON",
+                    "text": json.dumps(observation, indent=2),
+                })
                 continue
 
             summary = str(action_obj.get("summary", f"Iteration {iteration}"))
             action = str(action_obj.get("action", ""))
 
-            emit(f"{iteration}. {summary}")
+            emit({
+                "kind": "summary",
+                "iteration": iteration,
+                "action": action,
+                "text": summary,
+            })
+
+            observation = self.execute_action(action_obj)
+
+            emit({
+                "kind": "observation",
+                "iteration": iteration,
+                "action": action,
+                "text": json.dumps(observation, indent=2),
+            })
 
             if action in {"respond", "finish"}:
-                observation = self.execute_action(action_obj)
                 message = str(observation.get("message") or action_obj.get("message") or summary)
 
                 history.append({
@@ -554,10 +595,6 @@ Rules:
                 })
 
                 return message
-
-            emit(f"{iteration}. Executing action: {action}")
-            observation = self.execute_action(action_obj)
-            emit(f"{iteration}. Action completed: {action}")
 
             compact_observation = dict(observation)
             if "content" in compact_observation and isinstance(compact_observation["content"], str):
@@ -576,8 +613,21 @@ Rules:
                 "observation": compact_observation,
             })
 
+            if action == "write_file" and observation.get("success"):
+                filename = observation.get("filename", "the file")
+                final = f"Done. I created or updated {filename}."
+                emit({
+                    "kind": "status",
+                    "iteration": iteration,
+                    "text": final,
+                })
+                return final
+
         final = f"Stopped after {self.max_iterations} iterations. The task may be incomplete."
-        emit(final)
+        emit({
+            "kind": "status",
+            "text": final,
+        })
         return final
 
     # -------------------------

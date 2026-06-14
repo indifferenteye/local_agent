@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 
 import json
+import logging
+import os
 import queue
 import threading
-from typing import Dict, List
+from datetime import datetime
+from typing import Any, Dict, List
 
 from flask import Flask, Response, jsonify, render_template_string, request
 
@@ -12,11 +15,46 @@ from agent_core_fixed_import import OllamaAgent
 
 app = Flask(__name__)
 
+# Hide noisy Flask request logs like: GET /messages 200
+log = logging.getLogger("werkzeug")
+log.setLevel(logging.ERROR)
+
 agent = OllamaAgent()
 agent_lock = threading.Lock()
 
-messages: List[Dict[str, str]] = []
+SESSION_FILE = os.path.join(agent.working_dir, ".agent_sessions.json")
+
+messages: List[Dict[str, Any]] = []
 subscribers: List[queue.Queue] = []
+running = False
+
+
+def load_messages() -> None:
+    global messages
+
+    try:
+        if os.path.exists(SESSION_FILE):
+            with open(SESSION_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            if isinstance(data, list):
+                messages = data
+                print(f"Loaded {len(messages)} saved messages.")
+    except Exception as exc:
+        print(f"Could not load session file: {exc}")
+
+
+def save_messages() -> None:
+    try:
+        os.makedirs(os.path.dirname(SESSION_FILE), exist_ok=True)
+
+        with open(SESSION_FILE, "w", encoding="utf-8") as f:
+            json.dump(messages, f, indent=2, ensure_ascii=False)
+    except Exception as exc:
+        print(f"Could not save session file: {exc}")
+
+
+load_messages()
 
 
 HTML = """
@@ -46,6 +84,30 @@ HTML = """
             background: #18212b;
             border-bottom: 1px solid #263241;
             font-weight: 700;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .small-button {
+            border: 1px solid #314153;
+            border-radius: 10px;
+            padding: 7px 10px;
+            font: inherit;
+            font-size: 12px;
+            background: #101820;
+            color: #d7e2ee;
+        }
+
+        .small-button:hover {
+            background: #1d2935;
         }
 
         .meta {
@@ -88,6 +150,7 @@ HTML = """
         .progress-group {
             align-self: flex-start;
             max-width: 920px;
+            width: min(920px, 100%);
             border-radius: 14px;
             background: #151d26;
             border: 1px solid #2b3a4b;
@@ -95,19 +158,60 @@ HTML = """
             overflow: hidden;
         }
 
-        .progress-group summary {
+        .progress-group > summary {
             cursor: pointer;
             padding: 10px 14px;
             user-select: none;
             font-size: 14px;
         }
 
-        .progress-lines {
+        .progress-content {
             border-top: 1px solid #2b3a4b;
-            padding: 8px 14px 12px;
+            padding: 10px 12px 12px;
+        }
+
+        .step {
+            margin: 8px 0;
+            border: 1px solid #283747;
+            border-radius: 10px;
+            background: #101820;
+            overflow: hidden;
+        }
+
+        .step > summary {
+            cursor: pointer;
+            padding: 9px 10px;
             font-size: 13px;
+            color: #d7e2ee;
+        }
+
+        .step-body {
+            border-top: 1px solid #283747;
+            padding: 10px;
+        }
+
+        .label {
             color: #9fb0c2;
+            font-size: 12px;
+            margin: 8px 0 4px;
+        }
+
+        pre {
+            margin: 0;
+            padding: 10px;
+            background: #080d12;
+            border: 1px solid #202b38;
+            border-radius: 8px;
+            color: #d7e2ee;
+            overflow: auto;
+            max-height: 280px;
             white-space: pre-wrap;
+            word-break: break-word;
+            font-size: 12px;
+        }
+
+        .raw-model-output {
+            max-height: 360px;
         }
 
         form {
@@ -147,7 +251,13 @@ HTML = """
     </style>
 </head>
 <body>
-    <header>Local Ollama Agent</header>
+    <header>
+        <div>Local Ollama Agent</div>
+        <div class="header-actions">
+            <button class="small-button" id="clear">Clear chat</button>
+        </div>
+    </header>
+
     <div class="meta">
         Model: {{ model }} | Workdir: {{ workdir }}
     </div>
@@ -164,6 +274,7 @@ HTML = """
         const form = document.getElementById("form");
         const taskInput = document.getElementById("task");
         const sendButton = document.getElementById("send");
+        const clearButton = document.getElementById("clear");
 
         let lastRenderedCount = -1;
 
@@ -178,26 +289,84 @@ HTML = """
             chat.appendChild(div);
         }
 
+        function makePre(text, extraClass) {
+            const pre = document.createElement("pre");
+            if (extraClass) pre.className = extraClass;
+            pre.textContent = text || "";
+            return pre;
+        }
+
         function addProgressGroup(progressItems) {
             const details = document.createElement("details");
             details.className = "progress-group";
             details.open = false;
 
             const summary = document.createElement("summary");
+
             const latest = progressItems.length
                 ? progressItems[progressItems.length - 1].text
                 : "No progress yet";
 
-            const latestShort = latest.length > 80 ? latest.slice(0, 80) + "..." : latest;
+            const latestShort = latest && latest.length > 80
+                ? latest.slice(0, 80) + "..."
+                : latest;
+
             summary.textContent =
                 "Progress details (" + progressItems.length + ") · latest: " + latestShort;
 
-            const lines = document.createElement("div");
-            lines.className = "progress-lines";
-            lines.textContent = progressItems.map(m => m.text).join("\\n");
+            const content = document.createElement("div");
+            content.className = "progress-content";
+
+            const steps = new Map();
+
+            for (const item of progressItems) {
+                const iteration = item.iteration || "general";
+
+                if (!steps.has(iteration)) {
+                    steps.set(iteration, []);
+                }
+
+                steps.get(iteration).push(item);
+            }
+
+            for (const [iteration, items] of steps.entries()) {
+                const step = document.createElement("details");
+                step.className = "step";
+                step.open = false;
+
+                const stepSummary = document.createElement("summary");
+
+                const summaryItem =
+                    items.find(i => i.kind === "summary") ||
+                    items.find(i => i.kind === "status") ||
+                    items[items.length - 1];
+
+                const action = summaryItem.action ? " · " + summaryItem.action : "";
+                stepSummary.textContent =
+                    iteration === "general"
+                        ? "General progress"
+                        : "Step " + iteration + action + ": " + summaryItem.text;
+
+                const body = document.createElement("div");
+                body.className = "step-body";
+
+                for (const item of items) {
+                    const label = document.createElement("div");
+                    label.className = "label";
+                    label.textContent = item.kind || "progress";
+                    body.appendChild(label);
+
+                    const isRaw = item.kind === "model_output";
+                    body.appendChild(makePre(item.text || "", isRaw ? "raw-model-output" : ""));
+                }
+
+                step.appendChild(stepSummary);
+                step.appendChild(body);
+                content.appendChild(step);
+            }
 
             details.appendChild(summary);
-            details.appendChild(lines);
+            details.appendChild(content);
             chat.appendChild(details);
         }
 
@@ -224,6 +393,10 @@ HTML = """
                     pendingProgress = [];
                 }
 
+                if (msg.role === "status") {
+                    continue;
+                }
+
                 addMessageElement(msg.role, msg.text);
             }
 
@@ -243,18 +416,14 @@ HTML = """
                 const res = await fetch("/messages", { cache: "no-store" });
                 const data = await res.json();
                 renderMessages(data.messages);
-
-                const hasRunningTask = data.running === true;
-                sendButton.disabled = hasRunningTask;
+                sendButton.disabled = data.running === true;
             } catch (err) {
                 console.error("Could not load messages:", err);
             }
         }
 
-        // Polling fallback. This makes the UI work even when EventSource is flaky.
         setInterval(loadMessages, 1000);
 
-        // Live updates. Nice when it works, but polling is the reliable fallback.
         try {
             const events = new EventSource("/events");
 
@@ -298,6 +467,18 @@ HTML = """
             }
         });
 
+        clearButton.addEventListener("click", async () => {
+            if (!confirm("Clear the saved chat history?")) return;
+
+            try {
+                await fetch("/clear", { method: "POST" });
+                lastRenderedCount = -1;
+                await loadMessages();
+            } catch (err) {
+                console.error("Clear failed:", err);
+            }
+        });
+
         taskInput.addEventListener("keydown", (e) => {
             if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
@@ -312,16 +493,32 @@ HTML = """
 """
 
 
-running = False
+def normalize_progress_event(event: Any) -> Dict[str, Any]:
+    if isinstance(event, dict):
+        return {
+            "role": "progress",
+            "kind": str(event.get("kind", "progress")),
+            "iteration": event.get("iteration"),
+            "action": event.get("action"),
+            "text": str(event.get("text", "")),
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+        }
 
-
-def broadcast(role: str, text: str) -> None:
-    msg = {
-        "role": role,
-        "text": text,
+    return {
+        "role": "progress",
+        "kind": "progress",
+        "iteration": None,
+        "action": None,
+        "text": str(event),
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
     }
 
+
+def broadcast_message(msg: Dict[str, Any]) -> None:
+    msg.setdefault("timestamp", datetime.now().isoformat(timespec="seconds"))
+
     messages.append(msg)
+    save_messages()
 
     dead = []
     for q in subscribers:
@@ -333,6 +530,13 @@ def broadcast(role: str, text: str) -> None:
     for q in dead:
         if q in subscribers:
             subscribers.remove(q)
+
+
+def broadcast(role: str, text: str) -> None:
+    broadcast_message({
+        "role": role,
+        "text": text,
+    })
 
 
 @app.route("/")
@@ -393,8 +597,8 @@ def run_task():
 
         try:
             with agent_lock:
-                def progress(message: str) -> None:
-                    broadcast("progress", message)
+                def progress(event: Any) -> None:
+                    broadcast_message(normalize_progress_event(event))
 
                 final = agent.run_agentic_task(task, progress_callback=progress)
                 broadcast("agent", final)
@@ -408,11 +612,23 @@ def run_task():
     return jsonify({"started": True})
 
 
+@app.route("/clear", methods=["POST"])
+def clear_messages():
+    global messages
+
+    messages = []
+    save_messages()
+    broadcast("status", "cleared")
+
+    return jsonify({"cleared": True})
+
+
 if __name__ == "__main__":
     print("Testing Ollama connection...")
 
     if not agent.wait_for_ollama():
         print("Warning: Ollama is not reachable yet.")
 
+    print(f"Session file: {SESSION_FILE}")
     print("Starting web app on http://0.0.0.0:8080")
     app.run(host="0.0.0.0", port=8080, threaded=True)

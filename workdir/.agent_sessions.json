@@ -1,0 +1,65 @@
+[
+  {
+    "role": "user",
+    "text": "oy",
+    "timestamp": "2026-06-14T11:02:51"
+  },
+  {
+    "role": "progress",
+    "kind": "status",
+    "iteration": null,
+    "action": null,
+    "text": "Task started: oy",
+    "timestamp": "2026-06-14T11:02:51"
+  },
+  {
+    "role": "progress",
+    "kind": "status",
+    "iteration": 1,
+    "action": null,
+    "text": "1. Calling model for next action...",
+    "timestamp": "2026-06-14T11:02:51"
+  },
+  {
+    "role": "progress",
+    "kind": "heartbeat",
+    "iteration": null,
+    "action": null,
+    "text": "Model is still generating... 5s",
+    "timestamp": "2026-06-14T11:02:56"
+  },
+  {
+    "role": "progress",
+    "kind": "model_output",
+    "iteration": 1,
+    "action": null,
+    "text": "{\n  \"summary\": \"Responding to the user's input.\",\n  \"action\": \"respond\",\n  \"message\": \"Hello! How can I help you today?\"\n}",
+    "timestamp": "2026-06-14T11:03:01"
+  },
+  {
+    "role": "progress",
+    "kind": "summary",
+    "iteration": 1,
+    "action": "respond",
+    "text": "Responding to the user's input.",
+    "timestamp": "2026-06-14T11:03:01"
+  },
+  {
+    "role": "progress",
+    "kind": "observation",
+    "iteration": 1,
+    "action": "respond",
+    "text": "{\n  \"success\": true,\n  \"message\": \"Hello! How can I help you today?\"\n}",
+    "timestamp": "2026-06-14T11:03:01"
+  },
+  {
+    "role": "agent",
+    "text": "Hello! How can I help you today?",
+    "timestamp": "2026-06-14T11:03:01"
+  },
+  {
+    "role": "status",
+    "text": "idle",
+    "timestamp": "2026-06-14T11:03:01"
+  }
+]
