@@ -17,3 +17,15 @@ docker run -it --rm `
 ==
 
   create a html file with a canvas that animates a rotating donut. make it pretty
+
+```
+
+TODO: 
+- multiple steps?
+- better ui? Webui?
+- reasoning?
+- testing
+- better feedback after task comletion (and during?)
+- queue tasks
+- skills
+- ... 

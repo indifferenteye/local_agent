@@ -15,9 +15,9 @@ class OllamaAgent:
     def __init__(self, ollama_url: str | None = None, model: str | None = None):
         self.ollama_url = ollama_url or os.getenv("OLLAMA_URL", "http://localhost:11434")
         self.model = model or os.getenv("OLLAMA_MODEL", "gemma4:e2b")
+        self.working_dir = os.getenv("AGENT_WORKDIR", "/agent/workdir")
+        self.last_created_file = None
 
-        # Important: use /agent so created files appear in your mounted Windows folder
-        self.working_dir = os.getenv("AGENT_WORKDIR", "/agent")
         os.makedirs(self.working_dir, exist_ok=True)
 
     def check_ollama_status(self) -> bool:
@@ -86,6 +86,8 @@ class OllamaAgent:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(content)
 
+            self.last_created_file = filename
+
             return {
                 "success": True,
                 "path": path,
@@ -98,10 +100,32 @@ class OllamaAgent:
                 "error": str(exc),
             }
 
+    def read_file(self, filename: str) -> str:
+        path = self.safe_path(filename)
+
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+
+    def clean_model_file_content(self, content: str) -> str:
+        content = content.strip()
+
+        content = re.sub(
+            r"^```(?:html|javascript|js|css|text|python|json)?\s*",
+            "",
+            content,
+            flags=re.IGNORECASE,
+        )
+        content = re.sub(r"\s*```$", "", content)
+
+        return content.strip() + "\n"
+
     def extract_filename_from_task(self, task: str, default: str = "output.html") -> str:
         task_lower = task.lower()
 
-        match = re.search(r"(?:named|called|file named|file called)\s+([a-zA-Z0-9_.-]+\.[a-zA-Z0-9]+)", task)
+        match = re.search(
+            r"(?:named|called|file named|file called)\s+([a-zA-Z0-9_.-]+\.[a-zA-Z0-9]+)",
+            task,
+        )
         if match:
             return match.group(1)
 
@@ -143,14 +167,73 @@ Requirements:
             f"{json.dumps(result, indent=2)}"
         )
 
-    def clean_model_file_content(self, content: str) -> str:
-        content = content.strip()
+    def edit_last_file(self, task: str) -> str:
+        if not self.last_created_file:
+            return "No previous file found to edit."
 
-        # Remove markdown fences if the model still adds them
-        content = re.sub(r"^```(?:html|javascript|js|css|text)?\s*", "", content, flags=re.IGNORECASE)
-        content = re.sub(r"\s*```$", "", content)
+        try:
+            current_content = self.read_file(self.last_created_file)
+        except Exception as exc:
+            return f"Error reading {self.last_created_file}: {exc}"
 
-        return content.strip() + "\n"
+        prompt = f"""
+You are editing an existing file named {self.last_created_file}.
+
+User request:
+{task}
+
+Current file content:
+{current_content}
+
+Requirements:
+- Return the complete updated file content only.
+- Do not wrap it in markdown.
+- Do not include explanations.
+- Preserve the original file type.
+- The result must be ready to save directly.
+""".strip()
+
+        updated_content = self.query_ollama(prompt)
+
+        if updated_content.startswith("Error"):
+            return updated_content
+
+        updated_content = self.clean_model_file_content(updated_content)
+        result = self.write_file(self.last_created_file, updated_content)
+
+        return (
+            f"Edited file result:\n"
+            f"{json.dumps(result, indent=2)}"
+        )
+
+    def is_probably_file_edit_request(self, task: str) -> bool:
+        task_lower = task.lower()
+
+        edit_phrases = [
+            "make it",
+            "change it",
+            "modify it",
+            "update it",
+            "edit it",
+            "improve it",
+            "fix it",
+            "add ",
+            "remove ",
+            "turn it",
+            "make the",
+            "change the",
+            "modify the",
+            "update the",
+            "rotate",
+            "color",
+            "background",
+            "animation",
+            "canvas",
+        ]
+
+        return self.last_created_file is not None and any(
+            phrase in task_lower for phrase in edit_phrases
+        )
 
     def is_command_allowed(self, command: str) -> tuple[bool, str]:
         command_lower = command.lower().strip()
@@ -297,7 +380,9 @@ Requirements:
     def run_task(self, task: str) -> str:
         task_lower = task.lower()
 
-        # File-generation shortcut
+        if self.is_probably_file_edit_request(task):
+            return self.edit_last_file(task)
+
         if "html" in task_lower and "file" in task_lower:
             return self.create_html_file(task)
 
