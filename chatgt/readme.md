@@ -4,15 +4,21 @@ starting docker? serve?
 
 ==
 
+docker build -t ollama-agent .
+
+==
+
 docker run -it --rm `
-  -v "${PWD}\chatgt\agent-core-fixed.py:/agent/agent-core-fixed.py:ro" `
+  -p 8080:8080 `
+  -v "${PWD}\chatgt\web-agent.py:/agent/web-agent.py:ro" `
+  -v "${PWD}\chatgt\agent_core_fixed_import.py:/agent/agent_core_fixed_import.py:ro" `
   -v "${PWD}\workdir:/agent/workdir" `
   -w /agent `
   -e OLLAMA_URL="http://host.docker.internal:11434" `
   -e OLLAMA_MODEL="gemma4:e2b" `
   -e AGENT_WORKDIR="/agent/workdir" `
-  ollama-agent `
-  python /agent/agent-core-fixed.py
+  -e AGENT_MAX_ITERATIONS="8" `
+  ollama-agent
 
 ==
 

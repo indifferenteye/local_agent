@@ -44,8 +44,8 @@
     </style>
 </head>
 <body>
-    <div class="title">3D ROTATING DONUT</div>
-    <div class="subtitle">SIMULATED WITH MATHEMATICAL EQUATIONS</div>
+    <div class="title">3D ROTATING DONUT</divx>
+    <div class="subtitle">SIMULATED WITH MATHEMATICAL EQUATIONS</divx>
     <canvas id="donutCanvas"></canvas>
 
     <script>
@@ -97,110 +97,41 @@
             
             ctx.fillStyle = gradient;
             ctx.fillRect(0, 0, canvas.width, canvas.height);
-            
-            // Donut points
-            const points = [];
-            for (let i = 0; i < resolution; i++) {
-                const t = (i / resolution) * Math.PI * 2;
-                for (let j = 0; j < resolution; j++) {
-                    const p = (j / resolution) * Math.PI * 2;
-                    
-                    // Parametric equations for torus
-                    const x = (R + r * Math.cos(p)) * Math.cos(t);
-                    const y = (R + r * Math.cos(p)) * Math.sin(t);
-                    const z = r * Math.sin(p);
-                    
-                    points.push({ x, y, z });
-                }
-            }
-            
-            // Rotate points
-            const rotatedPoints = points.map(point => {
-                // Rotate around Y axis (theta)
-                const x1 = point.x * Math.cos(theta) - point.z * Math.sin(theta);
-                const z1 = point.x * Math.sin(theta) + point.z * Math.cos(theta);
-                
-                // Rotate around X axis (phi)
-                const y2 = point.y * Math.cos(phi) - z1 * Math.sin(phi);
-                const z2 = point.y * Math.sin(phi) + z1 * Math.cos(phi);
-                
-                return { x: x1, y: y2, z: z2 };
-            });
-            
-            // Project and draw points
-            const projectedPoints = rotatedPoints.map(point => project(point.x, point.y, point.z));
-            
-            // Draw donut segments
-            for (let i = 0; i < resolution; i++) {
-                ctx.beginPath();
-                let firstPoint = true;
-                
-                for (let j = 0; j < resolution; j++) {
-                    const index = i * resolution + j;
-                    if (index >= projectedPoints.length) continue;
-                    
-                    const point = projectedPoints[index];
-                    
-                    if (firstPoint) {
-                        ctx.moveTo(point.x, point.y);
-                        firstPoint = false;
-                    } else {
-                        ctx.lineTo(point.x, point.y);
-                    }
-                }
-                
-                // Close the loop
-                ctx.closePath();
-                
-                // Create gradient for each segment
-                const segmentColor = colors[i % colors.length];
-                const gradient = ctx.createLinearGradient(
-                    projectedPoints[i * resolution].x,
-                    projectedPoints[i * resolution].y,
-                    projectedPoints[(i + 1) * resolution - 1].x,
-                    projectedPoints[(i + 1) * resolution - 1].y
-                );
-                
-                gradient.addColorStop(0, segmentColor);
-                gradient.addColorStop(1, 'rgba(255, 255, 255, 0.2)');
-                
-                ctx.fillStyle = gradient;
-                ctx.fill();
-                
-                // Add glow effect
-                ctx.shadowColor = segmentColor;
-                ctx.shadowBlur = 10;
-                ctx.stroke();
-                ctx.shadowBlur = 0;
-            }
-            
-            // Draw center glow
+
+            // --- Donut Drawing Logic ---
             const centerX = canvas.width / 2;
             const centerY = canvas.height / 2;
-            const centerGradient = ctx.createRadialGradient(
-                centerX, centerY, 0,
-                centerX, centerY, 100
-            );
-            centerGradient.addColorStop(0, '#ffffff');
-            centerGradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
-            
-            ctx.fillStyle = centerGradient;
+            const distance = Math.sqrt(theta) * R; // Radial distance for drawing 
+
+            // Draw the main ring (outer edge)
             ctx.beginPath();
-            ctx.arc(centerX, centerY, 100, 0, Math.PI * 2);
+            ctx.arc(centerX, centerY, distance, 0, Math.PI * 2);
+            ctx.fillStyle = colors[0]; // White
             ctx.fill();
-            
-            // Update rotation angles
-            theta += rotationSpeed;
-            phi += rotationSpeed * 0.3;
+
+            // Draw the inner hole (cutout)
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, distance - r, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.5)'; // Darker center for depth
+            ctx.fill();
+
+            // Draw internal details (simplified representation)
+            ctx.strokeStyle = colors[1]; // Light gray ring
+            ctx.lineWidth = 5;
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, distance - r, 0, Math.PI * 2);
+            ctx.stroke();
         }
-        
+
         function animate() {
+            theta += rotationSpeed;
             drawDonut();
             requestAnimationFrame(animate);
         }
-        
-        // Start animation
+
+        // Start the animation loop
         animate();
+
     </script>
 </body>
 </html>
