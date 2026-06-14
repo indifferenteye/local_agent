@@ -22,6 +22,7 @@ agent = OllamaAgent()
 agent_lock = threading.Lock()
 
 SESSION_FILE = os.path.join(agent.working_dir, ".agent_sessions.json")
+SETTINGS_FILE = os.path.join(agent.working_dir, ".agent_settings.json")
 
 RECENT_MESSAGES_TO_KEEP = int(os.getenv("AGENT_RECENT_MESSAGES_TO_KEEP", "30"))
 SUMMARIZE_AFTER_MESSAGES = int(os.getenv("AGENT_SUMMARIZE_AFTER_MESSAGES", "60"))
@@ -29,6 +30,39 @@ SUMMARIZE_AFTER_MESSAGES = int(os.getenv("AGENT_SUMMARIZE_AFTER_MESSAGES", "60")
 messages: List[Dict[str, Any]] = []
 subscribers: List[queue.Queue] = []
 running = False
+
+
+def load_settings() -> None:
+    try:
+        if os.path.exists(SETTINGS_FILE):
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            selected_model = data.get("model")
+            if isinstance(selected_model, str) and selected_model.strip():
+                agent.model = selected_model.strip()
+                print(f"Loaded selected model: {agent.model}")
+
+    except Exception as exc:
+        print(f"Could not load settings file: {exc}")
+
+
+def save_settings() -> None:
+    try:
+        os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)
+
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "model": agent.model,
+                },
+                f,
+                indent=2,
+                ensure_ascii=False,
+            )
+
+    except Exception as exc:
+        print(f"Could not save settings file: {exc}")
 
 
 def load_messages() -> None:
@@ -111,6 +145,7 @@ def maybe_summarize_and_trim_memory() -> None:
 
 
 load_messages()
+load_settings()
 
 
 HTML = """
@@ -177,6 +212,27 @@ HTML = """
 
         .small-button:hover {
             background: #1d2935;
+        }
+
+        .model-label {
+            font-size: 12px;
+            color: #9fb0c2;
+            font-weight: 500;
+        }
+
+        .model-select {
+            border: 1px solid #314153;
+            border-radius: 10px;
+            padding: 7px 10px;
+            font: inherit;
+            font-size: 12px;
+            background: #101820;
+            color: #d7e2ee;
+            max-width: 260px;
+        }
+
+        .model-select:disabled {
+            opacity: 0.5;
         }
 
         .meta {
@@ -347,6 +403,24 @@ HTML = """
             cursor: default;
         }
 
+        @media (max-width: 760px) {
+            header {
+                align-items: flex-start;
+                flex-direction: column;
+            }
+
+            .header-actions {
+                width: 100%;
+                flex-wrap: wrap;
+            }
+
+            .model-select {
+                flex: 1;
+                min-width: 180px;
+                max-width: none;
+            }
+        }
+
         @media (max-width: 640px) {
             #chat {
                 padding: 10px;
@@ -372,11 +446,13 @@ HTML = """
     <header>
         <div>Local Ollama Agent</div>
         <div class="header-actions">
+            <label class="model-label" for="modelSelect">Model</label>
+            <select class="model-select" id="modelSelect"></select>
             <button class="small-button" id="clear">Clear chat</button>
         </div>
     </header>
 
-    <div class="meta">
+    <div class="meta" id="meta">
         Model: {{ model }} | Workdir: {{ workdir }}
     </div>
 
@@ -393,6 +469,8 @@ HTML = """
         const taskInput = document.getElementById("task");
         const sendButton = document.getElementById("send");
         const clearButton = document.getElementById("clear");
+        const modelSelect = document.getElementById("modelSelect");
+        const meta = document.getElementById("meta");
 
         let lastRenderedSignature = "";
         let renderTimer = null;
@@ -552,12 +630,10 @@ HTML = """
 
             lastRenderedSignature = signature;
 
-            // Always scroll down while a task is running or when user is near bottom.
             if (running || wasNearBottom) {
                 scrollToBottomSoon();
             }
 
-            // Force a layout recalculation. This fixes browser quirks with collapsed <details>.
             chat.style.display = "none";
             chat.offsetHeight;
             chat.style.display = "block";
@@ -567,12 +643,53 @@ HTML = """
             }
         }
 
+        async function loadModels() {
+            try {
+                const res = await fetch("/models", { cache: "no-store" });
+                const data = await res.json();
+
+                modelSelect.innerHTML = "";
+
+                for (const model of data.models || []) {
+                    const option = document.createElement("option");
+                    option.value = model;
+                    option.textContent = model;
+
+                    if (model === data.current_model) {
+                        option.selected = true;
+                    }
+
+                    modelSelect.appendChild(option);
+                }
+
+                if ((data.models || []).length === 0) {
+                    const option = document.createElement("option");
+                    option.value = "";
+                    option.textContent = "No models found";
+                    modelSelect.appendChild(option);
+                    modelSelect.disabled = true;
+                }
+
+                meta.textContent = "Model: " + data.current_model + " | Workdir: " + data.workdir;
+
+            } catch (err) {
+                console.error("Could not load models:", err);
+            }
+        }
+
         async function loadMessages() {
             try {
                 const res = await fetch("/messages", { cache: "no-store" });
                 const data = await res.json();
+
                 renderMessages(data.messages || [], data.running === true);
+
                 sendButton.disabled = data.running === true;
+                modelSelect.disabled = data.running === true;
+
+                if (data.model) {
+                    meta.textContent = "Model: " + data.model + " | Workdir: " + data.workdir;
+                }
             } catch (err) {
                 console.error("Could not load messages:", err);
             }
@@ -632,6 +749,35 @@ HTML = """
             }
         });
 
+        modelSelect.addEventListener("change", async () => {
+            const model = modelSelect.value;
+            if (!model) return;
+
+            try {
+                const res = await fetch("/model", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({ model })
+                });
+
+                if (!res.ok) {
+                    const err = await res.text();
+                    console.error(err);
+                    await loadModels();
+                    return;
+                }
+
+                await loadModels();
+                await loadMessages();
+
+            } catch (err) {
+                console.error("Could not change model:", err);
+                await loadModels();
+            }
+        });
+
         clearButton.addEventListener("click", async () => {
             if (!confirm("Clear the saved chat history? This will not clear the long-term memory summary.")) return;
 
@@ -656,6 +802,7 @@ HTML = """
             loadMessages();
         });
 
+        loadModels();
         loadMessages();
     </script>
 </body>
@@ -723,6 +870,54 @@ def get_messages():
     return jsonify({
         "messages": messages,
         "running": running,
+        "model": agent.model,
+        "workdir": agent.working_dir,
+    })
+
+
+@app.route("/models")
+def get_models():
+    models = agent.list_installed_models()
+
+    return jsonify({
+        "models": models,
+        "current_model": agent.model,
+        "workdir": agent.working_dir,
+    })
+
+
+@app.route("/model", methods=["POST"])
+def set_model():
+    global running
+
+    if running:
+        return jsonify({
+            "error": "Cannot change model while a task is running",
+        }), 409
+
+    data = request.get_json(force=True)
+    model = str(data.get("model", "")).strip()
+
+    if not model:
+        return jsonify({
+            "error": "Missing model",
+        }), 400
+
+    installed_models = agent.list_installed_models()
+
+    if model not in installed_models:
+        return jsonify({
+            "error": f"Model is not installed: {model}",
+            "installed_models": installed_models,
+        }), 400
+
+    agent.model = model
+    save_settings()
+
+    broadcast("status", f"Model changed to {model}")
+
+    return jsonify({
+        "model": agent.model,
     })
 
 
@@ -816,6 +1011,7 @@ if __name__ == "__main__":
         print("Warning: Ollama is not reachable yet.")
 
     print(f"Session file: {SESSION_FILE}")
+    print(f"Settings file: {SETTINGS_FILE}")
     print(f"Memory summary file: {agent.memory_summary_file}")
     print("Starting web app on http://0.0.0.0:8080")
     app.run(host="0.0.0.0", port=8080, threaded=True)

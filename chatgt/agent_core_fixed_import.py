@@ -50,7 +50,7 @@ class OllamaAgent:
         summary = summary.strip()
 
         if len(summary) > self.max_memory_summary_chars:
-            summary = summary[-self.max_memory_summary_chars :]
+            summary = summary[-self.max_memory_summary_chars:]
 
         os.makedirs(os.path.dirname(self.memory_summary_file), exist_ok=True)
 
@@ -68,10 +68,7 @@ class OllamaAgent:
             role = str(msg.get("role", ""))
             text = str(msg.get("text", ""))
 
-            if role == "progress":
-                continue
-
-            if role == "status":
+            if role in {"progress", "status"}:
                 continue
 
             if not text.strip():
@@ -114,7 +111,7 @@ Rules:
         summary = summary.strip()
 
         if len(summary) > self.max_memory_summary_chars:
-            summary = summary[-self.max_memory_summary_chars :]
+            summary = summary[-self.max_memory_summary_chars:]
 
         return summary
 
@@ -129,6 +126,27 @@ Rules:
         except requests.RequestException as exc:
             print(f"Ollama not ready: {exc}")
             return False
+
+    def list_installed_models(self) -> List[str]:
+        try:
+            response = requests.get(f"{self.ollama_url}/api/tags", timeout=10)
+
+            if response.status_code != 200:
+                return []
+
+            data = response.json()
+            models = data.get("models", [])
+
+            names = []
+            for model in models:
+                name = model.get("name") or model.get("model")
+                if name:
+                    names.append(str(name))
+
+            return sorted(set(names))
+
+        except Exception:
+            return []
 
     def wait_for_ollama(self, max_wait_seconds: int = 60) -> bool:
         waited = 0
@@ -248,7 +266,11 @@ Rules:
                 full = os.path.join(target, name)
                 rel = os.path.relpath(full, self.working_dir)
 
-                if name in {".agent_sessions.json", ".agent_memory_summary.txt"}:
+                if name in {
+                    ".agent_sessions.json",
+                    ".agent_memory_summary.txt",
+                    ".agent_settings.json",
+                }:
                     continue
 
                 entries.append({
@@ -284,7 +306,7 @@ Rules:
                 content = f.read(self.max_file_read_chars + 1)
 
             truncated = len(content) > self.max_file_read_chars
-            content = content[: self.max_file_read_chars]
+            content = content[:self.max_file_read_chars]
 
             return {
                 "success": True,
@@ -461,7 +483,7 @@ Rules:
         end = text.rfind("}")
 
         if start >= 0 and end > start:
-            return json.loads(text[start : end + 1])
+            return json.loads(text[start:end + 1])
 
         raise ValueError(f"No valid JSON object found in response: {text[:500]}")
 
