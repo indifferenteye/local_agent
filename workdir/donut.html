@@ -1,137 +1,161 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Rotating Donut</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Donut That Follows Cursor</title>
     <style>
         body {
             margin: 0;
             padding: 0;
-            background: #000;
+            height: 100vh;
+            overflow: hidden;
+            background-color: #000;
             display: flex;
             justify-content: center;
             align-items: center;
-            min-height: 100vh;
-            overflow: hidden;
-            font-family: 'Arial', sans-serif;
         }
         
         canvas {
-            display: block;
-            box-shadow: 0 0 50px rgba(255, 255, 255, 0.5);
-            border-radius: 10px;
-        }
-        
-        .title {
             position: absolute;
-            top: 20px;
-            color: #fff;
-            text-align: center;
-            width: 100%;
-            font-size: 24px;
-            text-shadow: 0 0 10px #ffffff, 0 0 20px #ffffff;
-            letter-spacing: 3px;
-        }
-        
-        .subtitle {
-            position: absolute;
-            top: 60px;
-            color: #fff;
-            text-align: center;
-            width: 100%;
-            font-size: 14px;
-            opacity: 0.7;
+            top: 0;
+            left: 0;
         }
     </style>
 </head>
 <body>
-    <div class="title">3D ROTATING DONUT</divx>
-    <div class="subtitle">SIMULATED WITH MATHEMATICAL EQUATIONS</divx>
     <canvas id="donutCanvas"></canvas>
 
     <script>
         const canvas = document.getElementById('donutCanvas');
         const ctx = canvas.getContext('2d');
-        
-        canvas.width = 800;
-        canvas.height = 600;
-        
+
+        // Set canvas to full window size
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
         // Donut parameters
-        const R = 1.5; // Major radius
-        const r = 0.5; // Minor radius
-        const resolution = 40;
-        const rotationSpeed = 0.02;
+        const R = 100; // Major radius
+        const r = 40;  // Minor radius
         
+        let mouseX = canvas.width / 2;
+        let mouseY = canvas.height / 2;
+        
+        // Track mouse movement
+        document.addEventListener('mousemove', (e) => {
+            mouseX = e.clientX;
+            mouseY = e.clientY;
+        });
+
+        // Rotation angles
         let theta = 0;
         let phi = 0;
-        
-        // Black and white color palette
-        const colors = [
-            '#FFFFFF', '#CCCCCC', '#AAAAAA', 
-            '#888888', '#666666', '#444444'
-        ];
-        
-        function project(x, y, z) {
-            const scale = 200;
-            const distance = 5;
-            
-            // Perspective projection
-            const factor = distance / (distance + z);
-            const px = x * factor * scale + canvas.width / 2;
-            const py = y * factor * scale + canvas.height / 2;
-            
-            return { x: px, y: py, z: z };
-        }
-        
-        function drawDonut() {
-            // Clear canvas with a semi-transparent black for trail effect
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-            
-            // Create gradient background
-            const gradient = ctx.createRadialGradient(
-                canvas.width/2, canvas.height/2, 0,
-                canvas.width/2, canvas.height/2, Math.max(canvas.width, canvas.height)/2
-            );
-            gradient.addColorStop(0, 'rgba(50, 50, 50, 0.3)');
-            gradient.addColorStop(1, 'rgba(0, 0, 0, 0.8)');
-            
-            ctx.fillStyle = gradient;
+
+        // Projection parameters
+        const K1 = 200; // Distance from viewer to screen
+        const K2 = 5;   // Distance from center to donut
+
+        function renderDonut() {
+            // Clear canvas
+            ctx.fillStyle = '#000';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-            // --- Donut Drawing Logic ---
+            // Calculate angles based on mouse position
             const centerX = canvas.width / 2;
             const centerY = canvas.height / 2;
-            const distance = Math.sqrt(theta) * R; // Radial distance for drawing 
+            
+            const deltaX = mouseX - centerX;
+            const deltaY = mouseY - centerY;
+            
+            theta = Math.atan2(deltaY, deltaX);
+            phi = Math.atan2(Math.sqrt(deltaX * deltaX + deltaY * deltaY), (centerY - mouseY));
 
-            // Draw the main ring (outer edge)
-            ctx.beginPath();
-            ctx.arc(centerX, centerY, distance, 0, Math.PI * 2);
-            ctx.fillStyle = colors[0]; // White
-            ctx.fill();
+            // Rotation matrices
+            const cosTheta = Math.cos(theta);
+            const sinTheta = Math.sin(theta);
+            const cosPhi = Math.cos(phi);
+            const sinPhi = Math.sin(phi);
 
-            // Draw the inner hole (cutout)
-            ctx.beginPath();
-            ctx.arc(centerX, centerY, distance - r, 0, Math.PI * 2);
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.5)'; // Darker center for depth
-            ctx.fill();
+            // Precompute constants
+            const cosR = Math.cos(R);
+            const sinR = Math.sin(R);
+            const cosr = Math.cos(r);
+            const sinr = Math.sin(r);
 
-            // Draw internal details (simplified representation)
-            ctx.strokeStyle = colors[1]; // Light gray ring
-            ctx.lineWidth = 5;
-            ctx.beginPath();
-            ctx.arc(centerX, centerY, distance - r, 0, Math.PI * 2);
-            ctx.stroke();
+            // Create a character map for rendering
+            const chars = ".,-~:;=!*#$@";
+            
+            // Create an array to store z-buffer values
+            const zBuffer = new Array(canvas.width * canvas.height).fill(0);
+            
+            // Create an array to store character buffer
+            const charBuffer = new Array(canvas.width * canvas.height).fill(' ');
+
+            // Render the donut
+            for (let i = 0; i < 100; i++) {
+                for (let j = 0; j < 100; j++) {
+                    const u = (i / 100) * Math.PI * 2;
+                    const v = (j / 100) * Math.PI * 2;
+
+                    // Donut coordinates
+                    const x = (R + r * Math.cos(v)) * Math.cos(u);
+                    const y = r * Math.sin(v);
+                    const z = (R + r * Math.cos(v)) * Math.sin(u);
+
+                    // Rotate around Y axis
+                    const x1 = x * cosTheta - z * sinTheta;
+                    const z1 = x * sinTheta + z * cosTheta;
+
+                    // Rotate around X axis
+                    const y1 = y * cosPhi - z1 * sinPhi;
+                    const z2 = y * sinPhi + z1 * cosPhi;
+
+                    // Perspective projection
+                    const ooz = 1 / (z2 + K2);
+                    
+                    // Screen coordinates
+                    const xp = Math.floor(canvas.width / 2 + K1 * ooz * x1);
+                    const yp = Math.floor(canvas.height / 2 - K1 * ooz * y1);
+
+                    if (xp >= 0 && xp < canvas.width && yp >= 0 && yp < canvas.height) {
+                        // Calculate luminance
+                        const L = Math.cos(v) * Math.sin(u) * Math.cos(phi) - Math.sin(v) * Math.sin(phi);
+                        
+                        // Get character based on luminance
+                        const luminanceIndex = Math.floor(L * 10);
+                        const char = chars[luminanceIndex] || ' ';
+                        
+                        const index = yp * canvas.width + xp;
+                        
+                        if (index < zBuffer.length && ooz > zBuffer[index]) {
+                            zBuffer[index] = ooz;
+                            charBuffer[index] = char;
+                        }
+                    }
+                }
+            }
+
+            // Draw the donut
+            for (let i = 0; i < canvas.width * canvas.height; i++) {
+                if (charBuffer[i] !== ' ') {
+                    const x = i % canvas.width;
+                    const y = Math.floor(i / canvas.width);
+                    
+                    ctx.fillStyle = '#ffffff';
+                    ctx.font = '10px monospace';
+                    ctx.fillText(charBuffer[i], x, y);
+                }
+            }
+
+            requestAnimationFrame(renderDonut);
         }
 
-        function animate() {
-            theta += rotationSpeed;
-            drawDonut();
-            requestAnimationFrame(animate);
-        }
-
-        // Start the animation loop
-        animate();
-
+        renderDonut();
     </script>
 </body>
 </html>

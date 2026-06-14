@@ -1,1 +1,4 @@
-/workdir/
+
+/workdir/*
+workdir/*
+workdir

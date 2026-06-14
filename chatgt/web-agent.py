@@ -23,6 +23,7 @@ agent_lock = threading.Lock()
 
 SESSION_FILE = os.path.join(agent.working_dir, ".agent_sessions.json")
 SETTINGS_FILE = os.path.join(agent.working_dir, ".agent_settings.json")
+MEMORY_STATE_FILE = os.path.join(agent.working_dir, ".agent_memory_state.json")
 
 RECENT_MESSAGES_TO_KEEP = int(os.getenv("AGENT_RECENT_MESSAGES_TO_KEEP", "30"))
 SUMMARIZE_AFTER_MESSAGES = int(os.getenv("AGENT_SUMMARIZE_AFTER_MESSAGES", "60"))
@@ -90,6 +91,32 @@ def save_messages() -> None:
         print(f"Could not save session file: {exc}")
 
 
+def load_memory_state() -> Dict[str, Any]:
+    try:
+        if os.path.exists(MEMORY_STATE_FILE):
+            with open(MEMORY_STATE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            if isinstance(data, dict):
+                return data
+    except Exception as exc:
+        print(f"Could not load memory state file: {exc}")
+
+    return {
+        "summarized_until_index": 0,
+    }
+
+
+def save_memory_state(state: Dict[str, Any]) -> None:
+    try:
+        os.makedirs(os.path.dirname(MEMORY_STATE_FILE), exist_ok=True)
+
+        with open(MEMORY_STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2, ensure_ascii=False)
+    except Exception as exc:
+        print(f"Could not save memory state file: {exc}")
+
+
 def compact_message_for_memory(msg: Dict[str, Any]) -> Dict[str, Any] | None:
     role = str(msg.get("role", ""))
     text = str(msg.get("text", ""))
@@ -107,24 +134,37 @@ def compact_message_for_memory(msg: Dict[str, Any]) -> Dict[str, Any] | None:
     }
 
 
-def maybe_summarize_and_trim_memory() -> None:
-    global messages
+def maybe_summarize_memory() -> None:
+    """
+    Updates long-term memory without deleting visible chat history.
 
+    The UI keeps all messages in .agent_sessions.json.
+    Only older messages are summarized into .agent_memory_summary.txt.
+    .agent_memory_state.json prevents repeatedly summarizing the same messages.
+    """
     if len(messages) <= SUMMARIZE_AFTER_MESSAGES:
         return
 
-    old_messages = messages[:-RECENT_MESSAGES_TO_KEEP]
-    recent_messages = messages[-RECENT_MESSAGES_TO_KEEP:]
+    state = load_memory_state()
+    summarized_until_index = int(state.get("summarized_until_index", 0))
+
+    # Do not summarize the most recent N messages, so the active context remains fresh.
+    summarize_until_index = max(0, len(messages) - RECENT_MESSAGES_TO_KEEP)
+
+    if summarize_until_index <= summarized_until_index:
+        return
+
+    messages_to_summarize = messages[summarized_until_index:summarize_until_index]
 
     memory_candidates = []
-    for msg in old_messages:
+    for msg in messages_to_summarize:
         compact = compact_message_for_memory(msg)
         if compact:
             memory_candidates.append(compact)
 
     if not memory_candidates:
-        messages = recent_messages
-        save_messages()
+        state["summarized_until_index"] = summarize_until_index
+        save_memory_state(state)
         return
 
     try:
@@ -132,12 +172,15 @@ def maybe_summarize_and_trim_memory() -> None:
         updated_summary = agent.summarize_conversation_memory(existing_summary, memory_candidates)
         agent.save_memory_summary(updated_summary)
 
-        messages = recent_messages
+        state["summarized_until_index"] = summarize_until_index
+        save_memory_state(state)
+
+        # Important: keep all visible messages.
         save_messages()
 
         print(
-            f"Summarized {len(memory_candidates)} messages. "
-            f"Kept {len(messages)} recent messages."
+            f"Updated memory summary from {len(memory_candidates)} messages. "
+            f"Kept all {len(messages)} visible messages."
         )
 
     except Exception as exc:
@@ -779,7 +822,7 @@ HTML = """
         });
 
         clearButton.addEventListener("click", async () => {
-            if (!confirm("Clear the saved chat history? This will not clear the long-term memory summary.")) return;
+            if (!confirm("Clear the visible saved chat history? This will not clear the long-term memory summary.")) return;
 
             try {
                 await fetch("/clear", { method: "POST" });
@@ -968,7 +1011,7 @@ def run_task():
                 final = agent.run_agentic_task(task, progress_callback=progress)
                 broadcast("agent", final)
 
-                maybe_summarize_and_trim_memory()
+                maybe_summarize_memory()
 
         finally:
             running = False
@@ -986,6 +1029,11 @@ def clear_messages():
 
     messages = []
     save_messages()
+
+    save_memory_state({
+        "summarized_until_index": 0,
+    })
+
     broadcast("status", "cleared")
 
     return jsonify({"cleared": True})
@@ -995,12 +1043,17 @@ def clear_messages():
 def get_memory():
     return jsonify({
         "summary": agent.load_memory_summary(),
+        "state": load_memory_state(),
     })
 
 
 @app.route("/clear-memory", methods=["POST"])
 def clear_memory():
     agent.save_memory_summary("")
+    save_memory_state({
+        "summarized_until_index": 0,
+    })
+
     return jsonify({"cleared": True})
 
 
@@ -1013,5 +1066,6 @@ if __name__ == "__main__":
     print(f"Session file: {SESSION_FILE}")
     print(f"Settings file: {SETTINGS_FILE}")
     print(f"Memory summary file: {agent.memory_summary_file}")
+    print(f"Memory state file: {MEMORY_STATE_FILE}")
     print("Starting web app on http://0.0.0.0:8080")
     app.run(host="0.0.0.0", port=8080, threaded=True)
