@@ -1,5 +1,0 @@
-- Created `donut.html` for 3D rotating donut visualization with canvas and mathematical projection
-- Updated `index.html` to support cursor-following behavior with vertical rotation and trailing motion
-- User prefers visible 3D donut shape rather than circular appearance
-- Current implementation makes viewer feel like inside the donut rather than viewing it from outside
-- Project operates within restricted Docker work directory
