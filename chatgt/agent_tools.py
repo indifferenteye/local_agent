@@ -119,6 +119,16 @@ def format_browser_screenshot(observation: Dict[str, object]) -> str:
     return f"Saved browser screenshot to `{filename}` from {url}."
 
 
+def format_send_image(observation: Dict[str, object]) -> str:
+    image = observation.get("image", {})
+
+    if isinstance(image, dict):
+        filename = image.get("filename", "the image")
+        return f"Attached `{filename}` to the chat."
+
+    return "Attached the image to the chat."
+
+
 def build_default_tools(agent) -> Dict[str, AgentTool]:
     tools: List[AgentTool] = [
         AgentTool(
@@ -264,6 +274,21 @@ def build_default_tools(agent) -> Dict[str, AgentTool]:
             handler=lambda action: agent.browser_close(),
         ),
         AgentTool(
+            name="send_image",
+            description="Attach an existing image file from the work directory to the next chat response.",
+            example={
+                "summary": "Short progress update for the user.",
+                "action": "send_image",
+                "filename": "page.png",
+                "label": "Screenshot",
+            },
+            handler=lambda action: agent.send_image(
+                str(action.get("filename", "")),
+                str(action.get("label", "")) or None,
+            ),
+            formatter=format_send_image,
+        ),
+        AgentTool(
             name="finish",
             description="Use this only after completing an agentic task.",
             example={
@@ -302,4 +327,5 @@ def render_tool_rules() -> str:
 - Do not use shell redirection, heredocs, pipes, backticks, ampersands, or destructive commands.
 - For website or URL content, use fetch_url instead of run_command with curl or wget.
 - For JavaScript-rendered pages, visual inspection, forms, buttons, or navigation, use browser_open and browser_snapshot.
-- Use browser_screenshot when the user asks what a page looks like or when visual layout matters."""
+- Use browser_screenshot when the user asks what a page looks like or when visual layout matters.
+- Use send_image after creating or finding an image file that should be shown in the chat."""

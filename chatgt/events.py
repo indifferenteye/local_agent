@@ -46,8 +46,13 @@ def broadcast_message(msg: Dict[str, Any]) -> None:
             state.subscribers.remove(q)
 
 
-def broadcast(role: str, text: str) -> None:
-    broadcast_message({
+def broadcast(role: str, text: str, images: list[dict[str, str]] | None = None) -> None:
+    msg: Dict[str, Any] = {
         "role": role,
         "text": text,
-    })
+    }
+
+    if images:
+        msg["images"] = images
+
+    broadcast_message(msg)

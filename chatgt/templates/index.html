@@ -274,7 +274,9 @@
         }
 
         form {
-            display: flex;
+            display: grid;
+            grid-template-columns: auto 1fr auto;
+            grid-template-rows: auto auto;
             gap: 8px;
             padding: 12px;
             background: #18212b;
@@ -284,6 +286,7 @@
 
         textarea {
             flex: 1;
+            grid-column: 2;
             resize: none;
             min-height: 46px;
             max-height: 140px;
@@ -306,6 +309,62 @@
             color: white;
             cursor: pointer;
             flex-shrink: 0;
+        }
+
+        #send {
+            grid-column: 3;
+            grid-row: 1;
+        }
+
+        .file-control {
+            grid-column: 1;
+            grid-row: 1;
+            align-self: stretch;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid #314153;
+            border-radius: 12px;
+            padding: 0 12px;
+            background: #101820;
+            color: #d7e2ee;
+            cursor: pointer;
+            min-width: 46px;
+            font-weight: 700;
+        }
+
+        .file-control:hover {
+            background: #1d2935;
+        }
+
+        .file-control input {
+            display: none;
+        }
+
+        .selected-files {
+            grid-column: 1 / -1;
+            grid-row: 2;
+            color: #9fb0c2;
+            font-size: 12px;
+            min-height: 16px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .message-images {
+            display: grid;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .message-image {
+            max-width: min(520px, 82vw);
+            max-height: 420px;
+            border-radius: 8px;
+            border: 1px solid #314153;
+            background: #080d12;
+            object-fit: contain;
         }
 
         button:disabled {
@@ -344,6 +403,7 @@
 
             form {
                 padding: 10px;
+                grid-template-columns: auto 1fr auto;
             }
 
             button {
@@ -418,15 +478,22 @@
     <main id="chat"></main>
 
     <form id="form">
+        <label class="file-control" title="Attach images">
+            +
+            <input id="images" type="file" accept="image/*" multiple />
+        </label>
         <textarea id="task" placeholder="Type a task..." autofocus></textarea>
         <button id="send" type="submit">Send</button>
+        <div class="selected-files" id="selectedFiles"></div>
     </form>
 
     <script>
         const chat = document.getElementById("chat");
         const form = document.getElementById("form");
         const taskInput = document.getElementById("task");
+        const imageInput = document.getElementById("images");
         const sendButton = document.getElementById("send");
+        const selectedFiles = document.getElementById("selectedFiles");
         const clearButton = document.getElementById("clear");
         const helpButton = document.getElementById("help");
         const helpModal = document.getElementById("helpModal");
@@ -452,11 +519,38 @@
             return row;
         }
 
-        function addMessageElement(role, text) {
+        function addMessageElement(role, text, images) {
             const row = makeRow(role === "user" ? "user" : "agent");
             const div = document.createElement("div");
             div.className = "msg " + role;
-            div.textContent = text;
+
+            const textNode = document.createElement("div");
+            textNode.textContent = text;
+            div.appendChild(textNode);
+
+            if (Array.isArray(images) && images.length > 0) {
+                const imageWrap = document.createElement("div");
+                imageWrap.className = "message-images";
+
+                for (const image of images) {
+                    const link = document.createElement("a");
+                    link.href = image.url;
+                    link.target = "_blank";
+                    link.rel = "noopener noreferrer";
+
+                    const img = document.createElement("img");
+                    img.className = "message-image";
+                    img.src = image.url;
+                    img.alt = image.label || image.filename || "Attached image";
+                    img.loading = "lazy";
+
+                    link.appendChild(img);
+                    imageWrap.appendChild(link);
+                }
+
+                div.appendChild(imageWrap);
+            }
+
             row.appendChild(div);
             chat.appendChild(row);
         }
@@ -551,7 +645,8 @@
             }
 
             const last = messages[messages.length - 1];
-            return messages.length + ":" + running + ":" + last.role + ":" + last.timestamp + ":" + String(last.text || "").length;
+            const imageCount = Array.isArray(last.images) ? last.images.length : 0;
+            return messages.length + ":" + running + ":" + last.role + ":" + last.timestamp + ":" + String(last.text || "").length + ":" + imageCount;
         }
 
         function renderMessages(messages, running) {
@@ -583,7 +678,7 @@
                     continue;
                 }
 
-                addMessageElement(msg.role, msg.text || "");
+                addMessageElement(msg.role, msg.text || "", msg.images || []);
             }
 
             if (pendingProgress.length > 0) {
@@ -650,6 +745,7 @@
                 renderMessages(data.messages || [], data.running === true);
 
                 sendButton.disabled = data.running === true;
+                imageInput.disabled = data.running === true;
                 modelSelect.disabled = data.running === true;
 
                 if (data.model) {
@@ -692,19 +788,38 @@
             e.preventDefault();
 
             const text = taskInput.value.trim();
-            if (!text) return;
+            const files = Array.from(imageInput.files || []);
+            if (!text && files.length === 0) return;
 
             taskInput.value = "";
+            imageInput.value = "";
+            selectedFiles.textContent = "";
             sendButton.disabled = true;
 
             try {
-                const res = await fetch("/task", {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json"
-                    },
-                    body: JSON.stringify({ task: text })
-                });
+                let res;
+
+                if (files.length > 0) {
+                    const formData = new FormData();
+                    formData.append("task", text);
+
+                    for (const file of files) {
+                        formData.append("images", file);
+                    }
+
+                    res = await fetch("/upload", {
+                        method: "POST",
+                        body: formData
+                    });
+                } else {
+                    res = await fetch("/task", {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json"
+                        },
+                        body: JSON.stringify({ task: text })
+                    });
+                }
 
                 if (!res.ok) {
                     const err = await res.text();
@@ -715,6 +830,11 @@
             } catch (err) {
                 console.error("Submit failed:", err);
             }
+        });
+
+        imageInput.addEventListener("change", () => {
+            const files = Array.from(imageInput.files || []);
+            selectedFiles.textContent = files.map(file => file.name).join(", ");
         });
 
         modelSelect.addEventListener("change", async () => {

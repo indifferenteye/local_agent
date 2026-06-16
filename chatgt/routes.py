@@ -5,9 +5,10 @@ import queue
 import threading
 from typing import Any
 
-from flask import Response, jsonify, render_template, request
+from flask import Response, jsonify, render_template, request, send_file
 
 import app_state as state
+from chat_images import image_message_data, safe_image_path, save_uploaded_image
 from commands import handle_slash_command
 from events import broadcast, broadcast_message, normalize_progress_event
 from memory import get_recent_conversation_context, maybe_summarize_memory
@@ -15,6 +16,43 @@ from persistence import load_memory_state, save_memory_state, save_messages, sav
 
 
 def register_routes(app) -> None:
+    def start_agent_task(
+        task: str,
+        task_images: list[str] | None = None,
+        display_task: str | None = None,
+    ):
+        broadcast(
+            "user",
+            display_task if display_task is not None else task,
+            images=[image_message_data(path) for path in task_images or []],
+        )
+        state.running = True
+
+        def worker():
+            try:
+                with state.agent_lock:
+                    def progress(event: Any) -> None:
+                        broadcast_message(normalize_progress_event(event))
+
+                    conversation_context = get_recent_conversation_context()
+
+                    final = state.agent.run_agentic_task(
+                        task,
+                        progress_callback=progress,
+                        conversation_context=conversation_context,
+                        task_images=task_images or [],
+                    )
+                    broadcast("agent", final, images=state.agent.consume_output_images())
+
+                    maybe_summarize_memory()
+
+            finally:
+                state.running = False
+                broadcast("status", "idle")
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+
     @app.route("/")
     def index():
         return render_template(
@@ -97,6 +135,50 @@ def register_routes(app) -> None:
         response.headers["X-Accel-Buffering"] = "no"
         return response
 
+    @app.route("/workdir-image/<path:filename>")
+    def workdir_image(filename: str):
+        try:
+            return send_file(safe_image_path(filename))
+        except FileNotFoundError:
+            return jsonify({"error": "Image not found"}), 404
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+    @app.route("/upload", methods=["POST"])
+    def upload_images():
+        task = request.form.get("task", "").strip()
+        files = request.files.getlist("images")
+
+        if not task and not files:
+            return jsonify({"error": "Missing task or image"}), 400
+
+        if state.running:
+            return jsonify({"error": "Task already running"}), 409
+
+        images = []
+
+        try:
+            for file in files:
+                if not file or not file.filename:
+                    continue
+                images.append(save_uploaded_image(file))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+        if task:
+            image_paths = [image["filename"] for image in images]
+            image_context = ""
+            if image_paths:
+                image_context = "\n\nUploaded image files:\n" + "\n".join(
+                    f"- {path}" for path in image_paths
+                )
+
+            start_agent_task(task + image_context, image_paths, display_task=task)
+            return jsonify({"started": True, "images": images})
+
+        broadcast("user", "Uploaded image.", images=images)
+        return jsonify({"uploaded": True, "images": images})
+
     @app.route("/task", methods=["POST"])
     def run_task():
         data = request.get_json(force=True)
@@ -113,32 +195,7 @@ def register_routes(app) -> None:
         if state.running:
             return jsonify({"error": "Task already running"}), 409
 
-        broadcast("user", task)
-        state.running = True
-
-        def worker():
-            try:
-                with state.agent_lock:
-                    def progress(event: Any) -> None:
-                        broadcast_message(normalize_progress_event(event))
-
-                    conversation_context = get_recent_conversation_context()
-
-                    final = state.agent.run_agentic_task(
-                        task,
-                        progress_callback=progress,
-                        conversation_context=conversation_context,
-                    )
-                    broadcast("agent", final)
-
-                    maybe_summarize_memory()
-
-            finally:
-                state.running = False
-                broadcast("status", "idle")
-
-        thread = threading.Thread(target=worker, daemon=True)
-        thread.start()
+        start_agent_task(task)
 
         return jsonify({"started": True})
 

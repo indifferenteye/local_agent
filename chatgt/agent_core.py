@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import base64
 import json
 import os
 import re
@@ -44,6 +45,7 @@ class OllamaAgent:
         self._playwright = None
         self._browser = None
         self._page = None
+        self._output_images: List[Dict[str, str]] = []
         self.tools = build_default_tools(self)
 
         os.makedirs(self.working_dir, exist_ok=True)
@@ -226,6 +228,7 @@ Rules:
         timeout: int | None = None,
         progress_callback: ProgressCallback = None,
         json_mode: bool = False,
+        image_paths: List[str] | None = None,
     ) -> str:
         if not self.wait_for_ollama():
             return "Error: Ollama is not responding after waiting"
@@ -254,6 +257,10 @@ Rules:
 
                 if self.think_mode is not None:
                     payload["think"] = self.think_mode
+
+                encoded_images = self.encode_images(image_paths or [])
+                if encoded_images:
+                    payload["images"] = encoded_images
 
                 response = requests.post(
                     f"{self.ollama_url}/api/generate",
@@ -315,6 +322,79 @@ Rules:
             raise ValueError("Refusing to access path outside working directory")
 
         return path
+
+    def encode_images(self, filenames: List[str]) -> List[str]:
+        encoded = []
+
+        for filename in filenames:
+            try:
+                path = self.safe_path(filename)
+
+                if not os.path.isfile(path):
+                    continue
+
+                if os.path.splitext(path.lower())[1] not in {
+                    ".png",
+                    ".jpg",
+                    ".jpeg",
+                    ".webp",
+                    ".bmp",
+                }:
+                    continue
+
+                with open(path, "rb") as f:
+                    encoded.append(base64.b64encode(f.read()).decode("ascii"))
+
+            except Exception:
+                continue
+
+        return encoded
+
+    def image_attachment(self, filename: str, label: str | None = None) -> Dict[str, str]:
+        path = self.safe_path(filename)
+
+        if not os.path.isfile(path):
+            raise FileNotFoundError(filename)
+
+        if os.path.splitext(path.lower())[1] not in {
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".gif",
+            ".webp",
+            ".bmp",
+        }:
+            raise ValueError("Unsupported image type")
+
+        rel = os.path.relpath(path, self.working_dir).replace("\\", "/")
+
+        return {
+            "filename": rel,
+            "label": label or os.path.basename(rel),
+            "url": f"/workdir-image/{rel}",
+        }
+
+    def send_image(self, filename: str, label: str | None = None) -> Dict[str, object]:
+        try:
+            image = self.image_attachment(filename, label)
+            self._output_images.append(image)
+
+            return {
+                "success": True,
+                "image": image,
+            }
+
+        except Exception as exc:
+            return {
+                "success": False,
+                "error": str(exc),
+                "filename": filename,
+            }
+
+    def consume_output_images(self) -> List[Dict[str, str]]:
+        images = list(self._output_images)
+        self._output_images.clear()
+        return images
 
     def list_files(self, path: str = ".") -> Dict[str, object]:
         try:
@@ -913,6 +993,7 @@ Instructions:
         task: str,
         history: List[Dict[str, object]],
         conversation_context: List[Dict[str, object]] | None = None,
+        task_images: List[str] | None = None,
     ) -> str:
         history_text = json.dumps(history[-12:], indent=2, ensure_ascii=False)
         memory_summary = self.load_memory_summary()
@@ -943,6 +1024,9 @@ Working directory:
 
 Previous steps and observations for this current task:
 {history_text}
+
+Uploaded images available to the model:
+{json.dumps(task_images or [], indent=2, ensure_ascii=False)}
 
 You must respond with exactly one JSON object. No markdown. No explanations outside JSON.
 
@@ -979,9 +1063,12 @@ Rules:
         task: str,
         progress_callback: ProgressCallback = None,
         conversation_context: List[Dict[str, object]] | None = None,
+        task_images: List[str] | None = None,
     ) -> str:
         history: List[Dict[str, object]] = []
         successful_action_counts: Dict[str, int] = {}
+        task_images = task_images or []
+        self._output_images = []
 
         def emit(event: ProgressEvent) -> None:
             if progress_callback:
@@ -999,6 +1086,7 @@ Rules:
                 task,
                 history,
                 conversation_context=conversation_context,
+                task_images=task_images,
             )
 
             emit({
@@ -1012,6 +1100,7 @@ Rules:
                 timeout=self.model_timeout_seconds,
                 progress_callback=progress_callback,
                 json_mode=True,
+                image_paths=task_images,
             )
 
             emit({
@@ -1089,6 +1178,7 @@ Rules:
                     timeout=self.model_timeout_seconds,
                     progress_callback=progress_callback,
                     json_mode=False,
+                    image_paths=task_images,
                 )
 
                 history.append({
