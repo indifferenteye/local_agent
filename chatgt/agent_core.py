@@ -8,8 +8,16 @@ import subprocess
 import threading
 import time
 from typing import Callable, Dict, List, Optional, Union
+from urllib.parse import urlparse
 
 import requests
+
+from agent_tools import (
+    build_default_tools,
+    default_formatter,
+    render_tool_prompt,
+    render_tool_rules,
+)
 
 
 ProgressEvent = Union[str, Dict[str, object]]
@@ -25,11 +33,18 @@ class OllamaAgent:
 
         self.max_iterations = int(os.getenv("AGENT_MAX_ITERATIONS", "8"))
         self.max_file_read_chars = int(os.getenv("AGENT_MAX_FILE_READ_CHARS", "60000"))
+        self.max_url_read_chars = int(os.getenv("AGENT_MAX_URL_READ_CHARS", "60000"))
+        self.max_browser_text_chars = int(os.getenv("AGENT_MAX_BROWSER_TEXT_CHARS", "12000"))
+        self.browser_timeout_ms = int(os.getenv("AGENT_BROWSER_TIMEOUT_MS", "20000"))
         self.model_timeout_seconds = int(os.getenv("AGENT_MODEL_TIMEOUT_SECONDS", "240"))
         self.heartbeat_seconds = int(os.getenv("AGENT_HEARTBEAT_SECONDS", "5"))
 
         self.memory_summary_file = os.path.join(self.working_dir, ".agent_memory_summary.txt")
         self.max_memory_summary_chars = int(os.getenv("AGENT_MAX_MEMORY_SUMMARY_CHARS", "12000"))
+        self._playwright = None
+        self._browser = None
+        self._page = None
+        self.tools = build_default_tools(self)
 
         os.makedirs(self.working_dir, exist_ok=True)
 
@@ -414,6 +429,279 @@ Rules:
         return content.strip() + "\n"
 
     # -------------------------
+    # Web fetches
+    # -------------------------
+
+    def fetch_url(self, url: str) -> Dict[str, object]:
+        try:
+            url = url.strip()
+            parsed = urlparse(url)
+
+            if parsed.scheme not in {"http", "https"}:
+                return {
+                    "success": False,
+                    "error": "Only http and https URLs are supported",
+                    "url": url,
+                }
+
+            if not parsed.netloc:
+                return {
+                    "success": False,
+                    "error": "URL is missing a host",
+                    "url": url,
+                }
+
+            response = requests.get(
+                url,
+                headers={
+                    "User-Agent": "local-ollama-agent/1.0",
+                },
+                timeout=20,
+                allow_redirects=True,
+            )
+
+            content = response.text
+            truncated = len(content) > self.max_url_read_chars
+            content = content[:self.max_url_read_chars]
+
+            return {
+                "success": True,
+                "url": url,
+                "final_url": response.url,
+                "status_code": response.status_code,
+                "content_type": response.headers.get("content-type", ""),
+                "content": content,
+                "truncated": truncated,
+            }
+
+        except requests.RequestException as exc:
+            return {
+                "success": False,
+                "error": f"Error fetching URL: {exc}",
+                "url": url,
+            }
+
+    def simple_curl_url(self, command: str) -> str | None:
+        try:
+            parts = shlex.split(command)
+        except ValueError:
+            return None
+
+        if not parts or os.path.basename(parts[0]) != "curl":
+            return None
+
+        urls = []
+        allowed_flags = {"-s", "-S", "-L", "-I", "-i", "-k", "--silent", "--show-error", "--location"}
+
+        for part in parts[1:]:
+            if part.startswith("-"):
+                if part in allowed_flags:
+                    continue
+
+                if part.startswith("-") and set(part.lstrip("-")) <= {"s", "S", "L", "I", "i", "k"}:
+                    continue
+
+                return None
+
+            urls.append(part)
+
+        if len(urls) != 1:
+            return None
+
+        return urls[0]
+
+    # -------------------------
+    # Browser automation
+    # -------------------------
+
+    def ensure_browser_page(self):
+        try:
+            if self._page is not None:
+                return self._page
+
+            from playwright.sync_api import sync_playwright
+
+            if self._playwright is None:
+                self._playwright = sync_playwright().start()
+
+            if self._browser is None:
+                self._browser = self._playwright.chromium.launch(
+                    headless=True,
+                    args=["--no-sandbox", "--disable-dev-shm-usage"],
+                )
+
+            self._page = self._browser.new_page()
+            self._page.set_default_timeout(self.browser_timeout_ms)
+            return self._page
+
+        except Exception as exc:
+            raise RuntimeError(
+                "Browser support is unavailable. Rebuild the Docker image after "
+                "installing Playwright/Chromium."
+            ) from exc
+
+    def browser_snapshot(self) -> Dict[str, object]:
+        try:
+            page = self.ensure_browser_page()
+
+            title = page.title()
+            url = page.url
+
+            try:
+                text = page.locator("body").inner_text(timeout=3000)
+            except Exception:
+                text = ""
+
+            truncated = len(text) > self.max_browser_text_chars
+            text = text[:self.max_browser_text_chars]
+
+            links = page.locator("a").evaluate_all(
+                """
+                els => els.slice(0, 30).map(el => ({
+                    text: (el.innerText || el.textContent || '').trim().slice(0, 120),
+                    href: el.href || ''
+                })).filter(item => item.text || item.href)
+                """
+            )
+            buttons = page.locator("button, input[type=button], input[type=submit]").evaluate_all(
+                """
+                els => els.slice(0, 30).map(el => ({
+                    text: (el.innerText || el.value || el.getAttribute('aria-label') || '').trim().slice(0, 120),
+                    type: el.tagName.toLowerCase()
+                })).filter(item => item.text)
+                """
+            )
+
+            return {
+                "success": True,
+                "url": url,
+                "title": title,
+                "text": text,
+                "text_truncated": truncated,
+                "links": links,
+                "buttons": buttons,
+            }
+
+        except Exception as exc:
+            return {
+                "success": False,
+                "error": str(exc),
+            }
+
+    def browser_open(self, url: str) -> Dict[str, object]:
+        try:
+            url = url.strip()
+            parsed = urlparse(url)
+
+            if parsed.scheme not in {"http", "https"}:
+                return {
+                    "success": False,
+                    "error": "Only http and https URLs are supported",
+                    "url": url,
+                }
+
+            if not parsed.netloc:
+                return {
+                    "success": False,
+                    "error": "URL is missing a host",
+                    "url": url,
+                }
+
+            page = self.ensure_browser_page()
+            response = page.goto(url, wait_until="domcontentloaded", timeout=self.browser_timeout_ms)
+
+            snapshot = self.browser_snapshot()
+            snapshot["status_code"] = response.status if response else None
+            return snapshot
+
+        except Exception as exc:
+            return {
+                "success": False,
+                "error": str(exc),
+                "url": url,
+            }
+
+    def browser_click(self, selector: str) -> Dict[str, object]:
+        try:
+            page = self.ensure_browser_page()
+            page.click(selector, timeout=self.browser_timeout_ms)
+
+            try:
+                page.wait_for_load_state("networkidle", timeout=5000)
+            except Exception:
+                pass
+
+            return self.browser_snapshot()
+
+        except Exception as exc:
+            return {
+                "success": False,
+                "error": str(exc),
+                "selector": selector,
+            }
+
+    def browser_type(self, selector: str, text: str) -> Dict[str, object]:
+        try:
+            page = self.ensure_browser_page()
+            page.fill(selector, text, timeout=self.browser_timeout_ms)
+            return self.browser_snapshot()
+
+        except Exception as exc:
+            return {
+                "success": False,
+                "error": str(exc),
+                "selector": selector,
+            }
+
+    def browser_screenshot(self, filename: str = "browser-screenshot.png") -> Dict[str, object]:
+        try:
+            page = self.ensure_browser_page()
+            path = self.safe_path(filename)
+
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            page.screenshot(path=path, full_page=True)
+
+            return {
+                "success": True,
+                "filename": filename,
+                "path": path,
+                "url": page.url,
+                "title": page.title(),
+            }
+
+        except Exception as exc:
+            return {
+                "success": False,
+                "error": str(exc),
+                "filename": filename,
+            }
+
+    def browser_close(self) -> Dict[str, object]:
+        try:
+            if self._page is not None:
+                self._page.close()
+                self._page = None
+
+            if self._browser is not None:
+                self._browser.close()
+                self._browser = None
+
+            if self._playwright is not None:
+                self._playwright.stop()
+                self._playwright = None
+
+            return {
+                "success": True,
+                "message": "Browser closed",
+            }
+
+        except Exception as exc:
+            return {
+                "success": False,
+                "error": str(exc),
+            }
+
+    # -------------------------
     # Commands
     # -------------------------
 
@@ -479,6 +767,30 @@ Rules:
         return True, "Allowed"
 
     def run_command(self, command: str) -> Dict[str, object]:
+        curl_url = self.simple_curl_url(command)
+        if curl_url:
+            fetched = self.fetch_url(curl_url)
+            if not fetched.get("success"):
+                return {
+                    "success": False,
+                    "stdout": "",
+                    "stderr": str(fetched.get("error", "URL fetch failed")),
+                    "returncode": 1,
+                }
+
+            content = str(fetched.get("content", ""))
+            return {
+                "success": True,
+                "stdout": content[-8000:],
+                "stderr": "",
+                "returncode": 0,
+                "url": fetched.get("url"),
+                "final_url": fetched.get("final_url"),
+                "status_code": fetched.get("status_code"),
+                "content_type": fetched.get("content_type"),
+                "truncated": fetched.get("truncated"),
+            }
+
         allowed, reason = self.is_command_allowed(command)
         if not allowed:
             return {
@@ -544,57 +856,9 @@ Rules:
         if not observation.get("success"):
             return f"Action failed: {observation.get('error', 'Unknown error')}"
 
-        if action == "list_files":
-            entries = observation.get("entries", [])
-
-            if not isinstance(entries, list):
-                return "I listed the path, but the result format was unexpected."
-
-            if not entries:
-                return "I can see the work directory, but it is empty."
-
-            lines = ["I can see these files and folders:"]
-
-            for entry in entries:
-                if not isinstance(entry, dict):
-                    continue
-
-                name = entry.get("name", "")
-                item_type = entry.get("type", "item")
-                size = entry.get("size")
-
-                if item_type == "directory":
-                    lines.append(f"- `{name}/` folder")
-                else:
-                    if size is None:
-                        lines.append(f"- `{name}` file")
-                    else:
-                        lines.append(f"- `{name}` file, {size} bytes")
-
-            return "\n".join(lines)
-
-        if action == "read_file":
-            filename = observation.get("filename", "the file")
-            content = observation.get("content", "")
-
-            return f"Contents of `{filename}`:\n\n{content}"
-
-        if action == "run_command":
-            stdout = str(observation.get("stdout", "")).strip()
-            stderr = str(observation.get("stderr", "")).strip()
-
-            if stdout and stderr:
-                return f"Command output:\n\n{stdout}\n\nErrors:\n\n{stderr}"
-
-            if stdout:
-                return f"Command output:\n\n{stdout}"
-
-            if stderr:
-                return f"Command produced errors:\n\n{stderr}"
-
-            return "The command completed successfully with no output."
-
-        return json.dumps(observation, indent=2, ensure_ascii=False)
+        tool = self.tools.get(action)
+        formatter = tool.formatter if tool and tool.formatter else default_formatter
+        return formatter(observation)
 
     def build_plain_response_prompt(
         self,
@@ -652,6 +916,8 @@ Instructions:
     ) -> str:
         history_text = json.dumps(history[-12:], indent=2, ensure_ascii=False)
         memory_summary = self.load_memory_summary()
+        tool_prompt = render_tool_prompt(self.tools)
+        tool_rules = render_tool_rules()
 
         conversation_context = conversation_context or []
         conversation_context_text = json.dumps(
@@ -682,62 +948,14 @@ You must respond with exactly one JSON object. No markdown. No explanations outs
 
 Available actions:
 
-1. respond
-Use this for greetings, questions, explanations, creative writing, rewrites, continuations, or anything that does not require file/action work.
-{{
-  "summary": "Short progress update for the user.",
-  "action": "respond"
-}}
-
-2. list_files
-{{
-  "summary": "Short progress update for the user.",
-  "action": "list_files",
-  "path": "."
-}}
-
-3. read_file
-{{
-  "summary": "Short progress update for the user.",
-  "action": "read_file",
-  "filename": "example.html"
-}}
-
-4. write_file
-{{
-  "summary": "Short progress update for the user.",
-  "action": "write_file",
-  "filename": "example.html",
-  "content": "complete file content here"
-}}
-
-5. run_command
-{{
-  "summary": "Short progress update for the user.",
-  "action": "run_command",
-  "command": "ls -la"
-}}
-
-6. finish
-Use this only after completing an agentic task.
-{{
-  "summary": "Short final summary for the user.",
-  "action": "finish",
-  "message": "Final response to the user."
-}}
+{tool_prompt}
 
 Rules:
 - Use the recent visible conversation context to resolve references like "it", "that", "make it better", "continue", "change the last answer", etc.
 - If the user asks to transform or continue the previous answer, use the previous agent response from conversation context.
 - Use the long-term memory only when relevant.
-- For normal conversation, use respond.
-- For questions that only need an answer, use respond.
-- For coding/file tasks, work step by step.
+{tool_rules}
 - Give a useful short summary on every iteration.
-- Prefer write_file for creating or editing files.
-- After a successful write_file, usually finish immediately unless the user explicitly asked you to test, inspect, or refine the result.
-- Do not rewrite the same file repeatedly unless the previous observation showed an error.
-- Do not use shell redirection, heredocs, pipes, backticks, ampersands, or destructive commands.
 - If modifying an existing file, read it first unless its content is already in the task history.
 - For HTML tasks, write a complete standalone HTML file.
 - Finish only when the task is actually complete.
@@ -746,36 +964,10 @@ Rules:
 
     def execute_action(self, action_obj: Dict[str, object]) -> Dict[str, object]:
         action = str(action_obj.get("action", "")).strip()
+        tool = self.tools.get(action)
 
-        if action == "respond":
-            return {
-                "success": True,
-                "message": str(action_obj.get("message", "")),
-            }
-
-        if action == "list_files":
-            return self.list_files(str(action_obj.get("path", ".")))
-
-        if action == "read_file":
-            filename = str(action_obj.get("filename", ""))
-            return self.read_file(filename)
-
-        if action == "write_file":
-            filename = str(action_obj.get("filename", ""))
-            content = str(action_obj.get("content", ""))
-            content = self.clean_file_content(content)
-            return self.write_file(filename, content)
-
-        if action == "run_command":
-            command = str(action_obj.get("command", ""))
-            return self.run_command(command)
-
-        if action == "finish":
-            return {
-                "success": True,
-                "finished": True,
-                "message": str(action_obj.get("message", action_obj.get("summary", ""))),
-            }
+        if tool:
+            return tool.handler(action_obj)
 
         return {
             "success": False,
