@@ -40,6 +40,5 @@ TODO:
 - queue tasks
 - skills
 - better system promt, better tools
-- vision / image processing (might need another model)
 - multiple model workflow? (agentic, coding, images etc)
 - ... 

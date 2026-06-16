@@ -16,6 +16,10 @@ class AgentTool:
     example: Dict[str, object]
     handler: ToolHandler
     formatter: ToolFormatter | None = None
+    continue_after_success: bool = False
+    verification_hint: str | None = None
+    direct_return_phrases: tuple[str, ...] = ()
+    direct_return_on_repeat: bool = True
 
 
 def default_formatter(observation: Dict[str, object]) -> str:
@@ -156,6 +160,14 @@ def build_default_tools(agent) -> Dict[str, AgentTool]:
             },
             handler=lambda action: agent.list_files(str(action.get("path", "."))),
             formatter=format_list_files,
+            direct_return_phrases=(
+                "what files",
+                "which files",
+                "files and folders",
+                "can you see",
+                "list files",
+                "show files",
+            ),
         ),
         AgentTool(
             name="read_file",
@@ -181,6 +193,13 @@ def build_default_tools(agent) -> Dict[str, AgentTool]:
                 str(action.get("filename", "")),
                 agent.clean_file_content(str(action.get("content", ""))),
             ),
+            continue_after_success=True,
+            verification_hint=(
+                "A file was written. Inspect or verify it before finishing. "
+                "For HTML/UI output, use browser_open or read_file as appropriate. "
+                "For Python/code output, run a syntax check if possible."
+            ),
+            direct_return_on_repeat=False,
         ),
         AgentTool(
             name="run_command",
@@ -203,6 +222,8 @@ def build_default_tools(agent) -> Dict[str, AgentTool]:
             },
             handler=lambda action: agent.fetch_url(str(action.get("url", ""))),
             formatter=format_fetch_url,
+            continue_after_success=True,
+            verification_hint="Use the fetched content to answer the user or decide whether browser inspection is needed.",
         ),
         AgentTool(
             name="browser_open",
@@ -214,6 +235,8 @@ def build_default_tools(agent) -> Dict[str, AgentTool]:
             },
             handler=lambda action: agent.browser_open(str(action.get("url", ""))),
             formatter=format_browser_snapshot,
+            continue_after_success=True,
+            verification_hint="Inspect the browser snapshot, then continue with clicks, typing, screenshots, or a final answer.",
         ),
         AgentTool(
             name="browser_snapshot",
@@ -224,6 +247,8 @@ def build_default_tools(agent) -> Dict[str, AgentTool]:
             },
             handler=lambda action: agent.browser_snapshot(),
             formatter=format_browser_snapshot,
+            continue_after_success=True,
+            verification_hint="Use this snapshot to decide the next browser action or produce the final answer.",
         ),
         AgentTool(
             name="browser_click",
@@ -235,6 +260,9 @@ def build_default_tools(agent) -> Dict[str, AgentTool]:
             },
             handler=lambda action: agent.browser_click(str(action.get("selector", ""))),
             formatter=format_browser_snapshot,
+            continue_after_success=True,
+            verification_hint="A click was performed. Inspect the new page state before finishing.",
+            direct_return_on_repeat=False,
         ),
         AgentTool(
             name="browser_type",
@@ -250,6 +278,9 @@ def build_default_tools(agent) -> Dict[str, AgentTool]:
                 str(action.get("text", "")),
             ),
             formatter=format_browser_snapshot,
+            continue_after_success=True,
+            verification_hint="Text was entered. Inspect the page or submit the form before finishing.",
+            direct_return_on_repeat=False,
         ),
         AgentTool(
             name="browser_screenshot",
@@ -263,6 +294,8 @@ def build_default_tools(agent) -> Dict[str, AgentTool]:
                 str(action.get("filename", "browser-screenshot.png"))
             ),
             formatter=format_browser_screenshot,
+            continue_after_success=True,
+            verification_hint="A screenshot was saved. Use send_image if the user should see it in chat.",
         ),
         AgentTool(
             name="browser_close",
@@ -287,6 +320,9 @@ def build_default_tools(agent) -> Dict[str, AgentTool]:
                 str(action.get("label", "")) or None,
             ),
             formatter=format_send_image,
+            continue_after_success=True,
+            verification_hint="The image is attached to the next agent message. Finish with a short explanation.",
+            direct_return_on_repeat=False,
         ),
         AgentTool(
             name="finish",
@@ -328,4 +364,6 @@ def render_tool_rules() -> str:
 - For website or URL content, use fetch_url instead of run_command with curl or wget.
 - For JavaScript-rendered pages, visual inspection, forms, buttons, or navigation, use browser_open and browser_snapshot.
 - Use browser_screenshot when the user asks what a page looks like or when visual layout matters.
-- Use send_image after creating or finding an image file that should be shown in the chat."""
+- Use send_image after creating or finding an image file that should be shown in the chat.
+- When a tool observation includes a policy_hint, follow it before finishing.
+- Do not finish immediately after writing files, clicking, typing, taking screenshots, or attaching images unless the policy_hint says the task is complete."""

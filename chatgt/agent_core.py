@@ -1143,6 +1143,7 @@ Rules:
 
             summary = str(action_obj.get("summary", f"Iteration {iteration}"))
             action = str(action_obj.get("action", ""))
+            tool = self.tools.get(action)
 
             emit({
                 "kind": "summary",
@@ -1211,6 +1212,14 @@ Rules:
                 compact_observation["content"] = content[:3000]
                 compact_observation["content_truncated_for_history"] = len(content) > 3000
 
+            if not observation.get("success"):
+                compact_observation["policy_hint"] = (
+                    "The action failed. Use the error details to choose a corrected next action. "
+                    "Do not repeat the same failing action without changing the input."
+                )
+            elif tool and tool.verification_hint:
+                compact_observation["policy_hint"] = tool.verification_hint
+
             history.append({
                 "iteration": iteration,
                 "summary": summary,
@@ -1238,34 +1247,26 @@ Rules:
                     successful_action_counts.get(action_signature, 0) + 1
                 )
 
-                if successful_action_counts[action_signature] >= 2:
-                    return self.format_observation_for_user(action, observation)
-
-            if action == "list_files" and observation.get("success"):
-                task_lower = task.lower()
-
-                if any(
-                    phrase in task_lower
-                    for phrase in [
-                        "what files",
-                        "which files",
-                        "files and folders",
-                        "can you see",
-                        "list files",
-                        "show files",
-                    ]
+                if (
+                    tool
+                    and tool.direct_return_on_repeat
+                    and successful_action_counts[action_signature] >= 2
                 ):
                     return self.format_observation_for_user(action, observation)
 
-            if action == "write_file" and observation.get("success"):
-                filename = observation.get("filename", "the file")
-                final = f"Done. I created or updated {filename}."
+            if tool and tool.direct_return_phrases and observation.get("success"):
+                task_lower = task.lower()
+
+                if any(phrase in task_lower for phrase in tool.direct_return_phrases):
+                    return self.format_observation_for_user(action, observation)
+
+            if tool and tool.continue_after_success and observation.get("success"):
                 emit({
                     "kind": "status",
                     "iteration": iteration,
-                    "text": final,
+                    "text": tool.verification_hint or "Continuing after tool result...",
                 })
-                return final
+                continue
 
         final = f"Stopped after {self.max_iterations} iterations. The task may be incomplete."
         emit({
