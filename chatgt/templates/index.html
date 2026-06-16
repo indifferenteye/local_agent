@@ -1,0 +1,798 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Local Ollama Agent</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        :root {
+            color-scheme: dark;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+
+        html,
+        body {
+            margin: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #101418;
+            color: #f3f7fb;
+        }
+
+        body {
+            display: grid;
+            grid-template-rows: auto auto 1fr auto;
+        }
+
+        header {
+            padding: 14px 16px;
+            background: #18212b;
+            border-bottom: 1px solid #263241;
+            font-weight: 700;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            min-height: 52px;
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-shrink: 0;
+        }
+
+        .small-button {
+            border: 1px solid #314153;
+            border-radius: 10px;
+            padding: 7px 10px;
+            font: inherit;
+            font-size: 12px;
+            background: #101820;
+            color: #d7e2ee;
+            cursor: pointer;
+        }
+
+        .small-button:hover {
+            background: #1d2935;
+        }
+
+        .model-label {
+            font-size: 12px;
+            color: #9fb0c2;
+            font-weight: 500;
+        }
+
+        .model-select {
+            border: 1px solid #314153;
+            border-radius: 10px;
+            padding: 7px 10px;
+            font: inherit;
+            font-size: 12px;
+            background: #101820;
+            color: #d7e2ee;
+            max-width: 260px;
+        }
+
+        .model-select:disabled {
+            opacity: 0.5;
+        }
+
+        .modal-backdrop {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.65);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            padding: 20px;
+        }
+
+        .modal-backdrop[hidden] {
+            display: none;
+        }
+
+        .modal {
+            width: min(720px, 96vw);
+            max-height: 86vh;
+            overflow: auto;
+            background: #151d26;
+            border: 1px solid #2b3a4b;
+            border-radius: 16px;
+            box-shadow: 0 16px 60px rgba(0, 0, 0, 0.45);
+        }
+
+        .modal-header {
+            padding: 14px;
+            border-bottom: 1px solid #2b3a4b;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .modal-body {
+            padding: 14px;
+            color: #d7e2ee;
+        }
+
+        .modal-body table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 12px;
+        }
+
+        .modal-body th,
+        .modal-body td {
+            text-align: left;
+            vertical-align: top;
+            padding: 8px;
+            border-bottom: 1px solid #283747;
+        }
+
+        .modal-body code {
+            background: #080d12;
+            border: 1px solid #202b38;
+            border-radius: 6px;
+            padding: 2px 5px;
+            color: #f3f7fb;
+        }
+
+        .meta {
+            font-size: 12px;
+            color: #9fb0c2;
+            padding: 8px 16px 10px;
+            background: #18212b;
+            border-bottom: 1px solid #263241;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        #chat {
+            min-height: 0;
+            overflow-y: auto;
+            padding: 16px;
+            display: block;
+        }
+
+        .row {
+            width: 100%;
+            display: flex;
+            margin-bottom: 12px;
+            clear: both;
+        }
+
+        .row.user-row {
+            justify-content: flex-end;
+        }
+
+        .row.agent-row,
+        .row.progress-row {
+            justify-content: flex-start;
+        }
+
+        .msg {
+            max-width: min(920px, 92vw);
+            padding: 12px 14px;
+            border-radius: 14px;
+            line-height: 1.45;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            word-break: break-word;
+        }
+
+        .user {
+            background: #255d3d;
+        }
+
+        .agent {
+            background: #1f2a36;
+            border: 1px solid #314153;
+        }
+
+        .progress-group {
+            width: min(920px, 92vw);
+            min-width: min(420px, 92vw);
+            border-radius: 14px;
+            background: #151d26;
+            border: 1px solid #2b3a4b;
+            color: #c8d6e5;
+            overflow: hidden;
+            display: block;
+        }
+
+        .progress-group > summary {
+            cursor: pointer;
+            padding: 10px 14px;
+            user-select: none;
+            font-size: 14px;
+            min-height: 40px;
+            display: block;
+            overflow-wrap: anywhere;
+        }
+
+        .progress-content {
+            border-top: 1px solid #2b3a4b;
+            padding: 10px 12px 12px;
+        }
+
+        .step {
+            margin: 8px 0;
+            border: 1px solid #283747;
+            border-radius: 10px;
+            background: #101820;
+            overflow: hidden;
+            display: block;
+        }
+
+        .step > summary {
+            cursor: pointer;
+            padding: 9px 10px;
+            font-size: 13px;
+            color: #d7e2ee;
+            min-height: 34px;
+            display: block;
+            overflow-wrap: anywhere;
+        }
+
+        .step-body {
+            border-top: 1px solid #283747;
+            padding: 10px;
+        }
+
+        .label {
+            color: #9fb0c2;
+            font-size: 12px;
+            margin: 8px 0 4px;
+        }
+
+        pre {
+            margin: 0;
+            padding: 10px;
+            background: #080d12;
+            border: 1px solid #202b38;
+            border-radius: 8px;
+            color: #d7e2ee;
+            overflow: auto;
+            max-height: 280px;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            word-break: break-word;
+            font-size: 12px;
+        }
+
+        .raw-model-output {
+            max-height: 360px;
+        }
+
+        form {
+            display: flex;
+            gap: 8px;
+            padding: 12px;
+            background: #18212b;
+            border-top: 1px solid #263241;
+            min-height: 72px;
+        }
+
+        textarea {
+            flex: 1;
+            resize: none;
+            min-height: 46px;
+            max-height: 140px;
+            border-radius: 12px;
+            border: 1px solid #314153;
+            background: #0f151b;
+            color: #f3f7fb;
+            padding: 10px;
+            font: inherit;
+            min-width: 0;
+        }
+
+        button {
+            border: 0;
+            border-radius: 12px;
+            padding: 0 18px;
+            font: inherit;
+            font-weight: 700;
+            background: #32a852;
+            color: white;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: default;
+        }
+
+        @media (max-width: 760px) {
+            header {
+                align-items: flex-start;
+                flex-direction: column;
+            }
+
+            .header-actions {
+                width: 100%;
+                flex-wrap: wrap;
+            }
+
+            .model-select {
+                flex: 1;
+                min-width: 180px;
+                max-width: none;
+            }
+        }
+
+        @media (max-width: 640px) {
+            #chat {
+                padding: 10px;
+            }
+
+            .msg,
+            .progress-group {
+                max-width: 96vw;
+                width: 96vw;
+            }
+
+            form {
+                padding: 10px;
+            }
+
+            button {
+                padding: 0 12px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div>Local Ollama Agent</div>
+        <div class="header-actions">
+            <label class="model-label" for="modelSelect">Model</label>
+            <select class="model-select" id="modelSelect"></select>
+            <button class="small-button" id="help">Help</button>
+            <button class="small-button" id="clear">Clear chat</button>
+        </div>
+    </header>
+
+    <div class="modal-backdrop" id="helpModal" hidden>
+        <div class="modal">
+            <div class="modal-header">
+                <strong>Available commands</strong>
+                <button class="small-button" id="closeHelp">Close</button>
+            </div>
+
+            <div class="modal-body">
+                <table>
+                    <tr>
+                        <th>Command</th>
+                        <th>Effect</th>
+                    </tr>
+                    <tr>
+                        <td><code>/help</code></td>
+                        <td>Show available commands.</td>
+                    </tr>
+                    <tr>
+                        <td><code>/set think</code></td>
+                        <td>Enable model thinking if supported.</td>
+                    </tr>
+                    <tr>
+                        <td><code>/set nothink</code></td>
+                        <td>Disable model thinking if supported.</td>
+                    </tr>
+                    <tr>
+                        <td><code>/set think low</code></td>
+                        <td>Use low thinking effort if supported.</td>
+                    </tr>
+                    <tr>
+                        <td><code>/set think medium</code></td>
+                        <td>Use medium thinking effort if supported.</td>
+                    </tr>
+                    <tr>
+                        <td><code>/set think high</code></td>
+                        <td>Use high thinking effort if supported.</td>
+                    </tr>
+                    <tr>
+                        <td><code>/set think default</code></td>
+                        <td>Use Ollama/model default behavior.</td>
+                    </tr>
+                </table>
+
+                <p>Note: not every Ollama model supports thinking options.</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="meta" id="meta">
+        Model: {{ model }} | Think: {{ think_mode }} | Workdir: {{ workdir }}
+    </div>
+
+    <main id="chat"></main>
+
+    <form id="form">
+        <textarea id="task" placeholder="Type a task..." autofocus></textarea>
+        <button id="send" type="submit">Send</button>
+    </form>
+
+    <script>
+        const chat = document.getElementById("chat");
+        const form = document.getElementById("form");
+        const taskInput = document.getElementById("task");
+        const sendButton = document.getElementById("send");
+        const clearButton = document.getElementById("clear");
+        const helpButton = document.getElementById("help");
+        const helpModal = document.getElementById("helpModal");
+        const closeHelpButton = document.getElementById("closeHelp");
+        const modelSelect = document.getElementById("modelSelect");
+        const meta = document.getElementById("meta");
+
+        let lastRenderedSignature = "";
+        let renderTimer = null;
+
+        function scrollToBottomSoon() {
+            requestAnimationFrame(() => {
+                chat.scrollTop = chat.scrollHeight;
+                requestAnimationFrame(() => {
+                    chat.scrollTop = chat.scrollHeight;
+                });
+            });
+        }
+
+        function makeRow(kind) {
+            const row = document.createElement("div");
+            row.className = "row " + kind + "-row";
+            return row;
+        }
+
+        function addMessageElement(role, text) {
+            const row = makeRow(role === "user" ? "user" : "agent");
+            const div = document.createElement("div");
+            div.className = "msg " + role;
+            div.textContent = text;
+            row.appendChild(div);
+            chat.appendChild(row);
+        }
+
+        function makePre(text, extraClass) {
+            const pre = document.createElement("pre");
+            if (extraClass) pre.className = extraClass;
+            pre.textContent = text || "";
+            return pre;
+        }
+
+        function addProgressGroup(progressItems) {
+            const row = makeRow("progress");
+
+            const details = document.createElement("details");
+            details.className = "progress-group";
+            details.open = false;
+
+            const summary = document.createElement("summary");
+
+            const latest = progressItems.length
+                ? progressItems[progressItems.length - 1].text
+                : "No progress yet";
+
+            const latestShort = latest && latest.length > 80
+                ? latest.slice(0, 80) + "..."
+                : latest;
+
+            summary.textContent =
+                "Progress details (" + progressItems.length + ") - latest: " + latestShort;
+
+            const content = document.createElement("div");
+            content.className = "progress-content";
+
+            const steps = new Map();
+
+            for (const item of progressItems) {
+                const iteration = item.iteration || "general";
+
+                if (!steps.has(iteration)) {
+                    steps.set(iteration, []);
+                }
+
+                steps.get(iteration).push(item);
+            }
+
+            for (const [iteration, items] of steps.entries()) {
+                const step = document.createElement("details");
+                step.className = "step";
+                step.open = false;
+
+                const stepSummary = document.createElement("summary");
+
+                const summaryItem =
+                    items.find(i => i.kind === "summary") ||
+                    items.find(i => i.kind === "status") ||
+                    items[items.length - 1];
+
+                const action = summaryItem.action ? " - " + summaryItem.action : "";
+                stepSummary.textContent =
+                    iteration === "general"
+                        ? "General progress"
+                        : "Step " + iteration + action + ": " + summaryItem.text;
+
+                const body = document.createElement("div");
+                body.className = "step-body";
+
+                for (const item of items) {
+                    const label = document.createElement("div");
+                    label.className = "label";
+                    label.textContent = item.kind || "progress";
+                    body.appendChild(label);
+
+                    const isRaw = item.kind === "model_output";
+                    body.appendChild(makePre(item.text || "", isRaw ? "raw-model-output" : ""));
+                }
+
+                step.appendChild(stepSummary);
+                step.appendChild(body);
+                content.appendChild(step);
+            }
+
+            details.appendChild(summary);
+            details.appendChild(content);
+            row.appendChild(details);
+            chat.appendChild(row);
+        }
+
+        function getRenderSignature(messages, running) {
+            if (!messages || messages.length === 0) {
+                return "empty:" + running;
+            }
+
+            const last = messages[messages.length - 1];
+            return messages.length + ":" + running + ":" + last.role + ":" + last.timestamp + ":" + String(last.text || "").length;
+        }
+
+        function renderMessages(messages, running) {
+            const signature = getRenderSignature(messages, running);
+
+            if (signature === lastRenderedSignature) {
+                return;
+            }
+
+            const wasNearBottom =
+                chat.scrollTop + chat.clientHeight >= chat.scrollHeight - 120;
+
+            chat.innerHTML = "";
+
+            let pendingProgress = [];
+
+            for (const msg of messages) {
+                if (msg.role === "progress") {
+                    pendingProgress.push(msg);
+                    continue;
+                }
+
+                if (pendingProgress.length > 0) {
+                    addProgressGroup(pendingProgress);
+                    pendingProgress = [];
+                }
+
+                if (msg.role === "status") {
+                    continue;
+                }
+
+                addMessageElement(msg.role, msg.text || "");
+            }
+
+            if (pendingProgress.length > 0) {
+                addProgressGroup(pendingProgress);
+            }
+
+            lastRenderedSignature = signature;
+
+            if (running || wasNearBottom) {
+                scrollToBottomSoon();
+            }
+
+            chat.style.display = "none";
+            chat.offsetHeight;
+            chat.style.display = "block";
+
+            if (running || wasNearBottom) {
+                scrollToBottomSoon();
+            }
+        }
+
+        async function loadModels() {
+            try {
+                const res = await fetch("/models", { cache: "no-store" });
+                const data = await res.json();
+
+                modelSelect.innerHTML = "";
+
+                for (const model of data.models || []) {
+                    const option = document.createElement("option");
+                    option.value = model;
+                    option.textContent = model;
+
+                    if (model === data.current_model) {
+                        option.selected = true;
+                    }
+
+                    modelSelect.appendChild(option);
+                }
+
+                if ((data.models || []).length === 0) {
+                    const option = document.createElement("option");
+                    option.value = "";
+                    option.textContent = "No models found";
+                    modelSelect.appendChild(option);
+                    modelSelect.disabled = true;
+                }
+
+                meta.textContent =
+                    "Model: " + data.current_model +
+                    " | Think: " + data.think_mode +
+                    " | Workdir: " + data.workdir;
+
+            } catch (err) {
+                console.error("Could not load models:", err);
+            }
+        }
+
+        async function loadMessages() {
+            try {
+                const res = await fetch("/messages", { cache: "no-store" });
+                const data = await res.json();
+
+                renderMessages(data.messages || [], data.running === true);
+
+                sendButton.disabled = data.running === true;
+                modelSelect.disabled = data.running === true;
+
+                if (data.model) {
+                    meta.textContent =
+                        "Model: " + data.model +
+                        " | Think: " + data.think_mode +
+                        " | Workdir: " + data.workdir;
+                }
+            } catch (err) {
+                console.error("Could not load messages:", err);
+            }
+        }
+
+        function scheduleLoadMessages() {
+            if (renderTimer) return;
+
+            renderTimer = setTimeout(async () => {
+                renderTimer = null;
+                await loadMessages();
+            }, 100);
+        }
+
+        setInterval(loadMessages, 1000);
+
+        try {
+            const events = new EventSource("/events");
+
+            events.onmessage = () => {
+                scheduleLoadMessages();
+            };
+
+            events.onerror = () => {
+                console.log("EventSource disconnected or retrying...");
+            };
+        } catch (err) {
+            console.log("EventSource unavailable:", err);
+        }
+
+        form.addEventListener("submit", async (e) => {
+            e.preventDefault();
+
+            const text = taskInput.value.trim();
+            if (!text) return;
+
+            taskInput.value = "";
+            sendButton.disabled = true;
+
+            try {
+                const res = await fetch("/task", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({ task: text })
+                });
+
+                if (!res.ok) {
+                    const err = await res.text();
+                    console.error(err);
+                }
+
+                await loadMessages();
+            } catch (err) {
+                console.error("Submit failed:", err);
+            }
+        });
+
+        modelSelect.addEventListener("change", async () => {
+            const model = modelSelect.value;
+            if (!model) return;
+
+            try {
+                const res = await fetch("/model", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({ model })
+                });
+
+                if (!res.ok) {
+                    const err = await res.text();
+                    console.error(err);
+                    await loadModels();
+                    return;
+                }
+
+                await loadModels();
+                await loadMessages();
+
+            } catch (err) {
+                console.error("Could not change model:", err);
+                await loadModels();
+            }
+        });
+
+        helpButton.addEventListener("click", () => {
+            helpModal.hidden = false;
+        });
+
+        closeHelpButton.addEventListener("click", () => {
+            helpModal.hidden = true;
+        });
+
+        helpModal.addEventListener("click", (e) => {
+            if (e.target === helpModal) {
+                helpModal.hidden = true;
+            }
+        });
+
+        document.addEventListener("keydown", (e) => {
+            if (e.key === "Escape") {
+                helpModal.hidden = true;
+            }
+        });
+
+        clearButton.addEventListener("click", async () => {
+            if (!confirm("Clear the visible saved chat history? This will not clear the long-term memory summary.")) return;
+
+            try {
+                await fetch("/clear", { method: "POST" });
+                lastRenderedSignature = "";
+                await loadMessages();
+            } catch (err) {
+                console.error("Clear failed:", err);
+            }
+        });
+
+        taskInput.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                form.requestSubmit();
+            }
+        });
+
+        window.addEventListener("resize", () => {
+            lastRenderedSignature = "";
+            loadMessages();
+        });
+
+        loadModels();
+        loadMessages();
+    </script>
+</body>
+</html>
+

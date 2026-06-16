@@ -10,10 +10,9 @@ docker build -t ollama-agent .
 
 docker run -it --rm `
   -p 8080:8080 `
-  -v "${PWD}\chatgt\web-agent.py:/agent/web-agent.py:ro" `
-  -v "${PWD}\chatgt\agent_core_fixed_import.py:/agent/agent_core_fixed_import.py:ro" `
+  -v "${PWD}\chatgt:/app:ro" `
   -v "${PWD}\workdir:/agent/workdir" `
-  -w /agent `
+  -w /app `
   -e OLLAMA_URL="http://host.docker.internal:11434" `
   -e OLLAMA_MODEL="gemma4:e2b" `
   -e AGENT_WORKDIR="/agent/workdir" `
