@@ -52,3 +52,8 @@ Context notes:
 - `OLLAMA_NUM_CTX` is sent to Ollama as `options.num_ctx` when set.
 - For larger local-agent workloads, also configure the Ollama server/app context length. Example: `OLLAMA_CONTEXT_LENGTH=64000 ollama serve`.
 - The app does not persist Ollama's deprecated generated token `context`, so switching models between messages keeps working from text history and summaries.
+
+Session persistence notes:
+- `.agent_sessions.json` persists durable chat messages by default: `user` and final `agent` messages.
+- Live `progress` and `status` messages still appear in the UI, but are not saved by default.
+- Set `AGENT_PERSIST_PROGRESS=true` or `AGENT_PERSIST_STATUS=true` only when debugging detailed runtime traces.

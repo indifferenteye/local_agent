@@ -2,9 +2,42 @@
 
 import json
 import os
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import app_state as state
+
+
+PERSIST_PROGRESS = os.getenv("AGENT_PERSIST_PROGRESS", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+PERSIST_STATUS = os.getenv("AGENT_PERSIST_STATUS", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+
+
+def should_persist_message(msg: Dict[str, Any]) -> bool:
+    role = str(msg.get("role", ""))
+
+    if role in {"user", "agent"}:
+        return True
+
+    if role == "progress":
+        return PERSIST_PROGRESS
+
+    if role == "status":
+        return PERSIST_STATUS
+
+    return False
+
+
+def persisted_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [msg for msg in messages if should_persist_message(msg)]
 
 
 def load_settings() -> None:
@@ -67,9 +100,16 @@ def load_messages() -> None:
                 data = json.load(f)
 
             if isinstance(data, list):
+                compacted_data = persisted_messages(data)
                 state.messages.clear()
-                state.messages.extend(data)
-                print(f"Loaded {len(state.messages)} saved messages.")
+                state.messages.extend(compacted_data)
+                print(
+                    f"Loaded {len(state.messages)} saved messages "
+                    f"from {len(data)} stored records."
+                )
+
+                if len(compacted_data) != len(data):
+                    save_messages()
     except Exception as exc:
         print(f"Could not load session file: {exc}")
 
@@ -79,7 +119,7 @@ def save_messages() -> None:
         os.makedirs(os.path.dirname(state.SESSION_FILE), exist_ok=True)
 
         with open(state.SESSION_FILE, "w", encoding="utf-8") as f:
-            json.dump(state.messages, f, indent=2, ensure_ascii=False)
+            json.dump(persisted_messages(state.messages), f, indent=2, ensure_ascii=False)
     except Exception as exc:
         print(f"Could not save session file: {exc}")
 

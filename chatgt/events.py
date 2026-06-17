@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any, Dict
 
 import app_state as state
-from persistence import save_messages
+from persistence import save_messages, should_persist_message
 
 
 def normalize_progress_event(event: Any) -> Dict[str, Any]:
@@ -32,7 +32,9 @@ def broadcast_message(msg: Dict[str, Any]) -> None:
     msg.setdefault("timestamp", datetime.now().isoformat(timespec="seconds"))
 
     state.messages.append(msg)
-    save_messages()
+
+    if should_persist_message(msg):
+        save_messages()
 
     dead = []
     for q in state.subscribers:

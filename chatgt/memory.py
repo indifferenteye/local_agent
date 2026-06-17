@@ -3,7 +3,7 @@
 from typing import Any, Dict, List
 
 import app_state as state
-from persistence import load_memory_state, save_memory_state, save_messages
+from persistence import load_memory_state, persisted_messages, save_memory_state, save_messages
 
 
 def get_recent_conversation_context() -> List[Dict[str, Any]]:
@@ -41,18 +41,20 @@ def maybe_summarize_memory() -> None:
     Only older messages are summarized into .agent_memory_summary.txt.
     .agent_memory_state.json prevents repeatedly summarizing the same messages.
     """
-    if len(state.messages) <= state.SUMMARIZE_AFTER_MESSAGES:
+    durable_messages = persisted_messages(state.messages)
+
+    if len(durable_messages) <= state.SUMMARIZE_AFTER_MESSAGES:
         return
 
     memory_state = load_memory_state()
     summarized_until_index = int(memory_state.get("summarized_until_index", 0))
 
-    summarize_until_index = max(0, len(state.messages) - state.RECENT_MESSAGES_TO_KEEP)
+    summarize_until_index = max(0, len(durable_messages) - state.RECENT_MESSAGES_TO_KEEP)
 
     if summarize_until_index <= summarized_until_index:
         return
 
-    messages_to_summarize = state.messages[summarized_until_index:summarize_until_index]
+    messages_to_summarize = durable_messages[summarized_until_index:summarize_until_index]
 
     memory_candidates = []
     for msg in messages_to_summarize:
