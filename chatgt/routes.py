@@ -47,11 +47,35 @@ def register_routes(app) -> None:
                         ),
                     }))
 
+                    routing_decision = state.agent.route_current_task(
+                        task,
+                        conversation_context=conversation_context,
+                        task_images=task_images or [],
+                    )
+                    state.agent.log_routing_decision(task, routing_decision)
+                    classification = routing_decision.classification
+                    classification_type = (
+                        classification.task_type if classification else "unknown"
+                    )
+                    fallback = " via default fallback" if routing_decision.fallback_used else ""
+
+                    broadcast_message(normalize_progress_event({
+                        "kind": "status",
+                        "text": (
+                            "Routing: "
+                            f"{classification_type} -> {routing_decision.selected_role} "
+                            f"({routing_decision.selected_model}){fallback}. "
+                            f"{routing_decision.reason}"
+                        ),
+                    }))
+
                     final = state.agent.run_agentic_task(
                         task,
                         progress_callback=progress,
                         conversation_context=conversation_context,
                         task_images=task_images or [],
+                        selected_model=routing_decision.selected_model,
+                        routing_decision=routing_decision,
                     )
                     broadcast("agent", final, images=state.agent.consume_output_images())
 
@@ -139,6 +163,13 @@ def register_routes(app) -> None:
             "context_target_tokens": state.CONTEXT_TARGET_TOKENS,
             "ollama_num_ctx": state.agent.ollama_num_ctx,
             "status": state.context_manager.context_status(summary, recent_context),
+            "routing": {
+                "enabled": state.agent.routing_enabled,
+                "quality_mode": state.agent.routing_quality_mode,
+                "debug_logging": state.agent.routing_debug_enabled,
+                "debug_log_file": state.agent.routing_debug_file,
+                "roles": state.agent.routing_roles,
+            },
         }
 
     @app.route("/context-settings", methods=["GET", "POST"])
@@ -153,9 +184,10 @@ def register_routes(app) -> None:
 
         data = request.get_json(force=True)
         state.update_context_settings(data)
+        state.update_routing_settings(data)
         save_settings()
 
-        broadcast("status", "Context settings updated")
+        broadcast("status", "Settings updated")
         return jsonify(context_payload())
 
     @app.route("/events")

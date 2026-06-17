@@ -66,6 +66,23 @@ def update_context_settings(data: Dict[str, Any]) -> None:
     context_manager.recent_message_char_limit = RECENT_CONVERSATION_CONTEXT_CHARS
     context_manager.target_tokens = CONTEXT_TARGET_TOKENS
 
+
+def update_routing_settings(data: Dict[str, Any]) -> None:
+    routing = data.get("routing") if isinstance(data.get("routing"), dict) else data
+
+    if "enabled" in routing:
+        agent.set_routing_enabled(routing.get("enabled"))
+
+    if "quality_mode" in routing:
+        agent.set_routing_quality_mode(routing.get("quality_mode"))
+
+    if "debug_logging" in routing:
+        agent.set_routing_debug_enabled(routing.get("debug_logging"))
+
+    roles = routing.get("roles")
+    if isinstance(roles, dict):
+        agent.set_routing_roles(roles)
+
 messages: List[Dict[str, Any]] = []
 subscribers: List[queue.Queue] = []
 running = False

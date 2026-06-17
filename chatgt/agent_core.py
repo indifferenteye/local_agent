@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import base64
+from datetime import datetime
 import json
 import os
 import re
@@ -13,6 +14,7 @@ from urllib.parse import urlparse
 
 import requests
 
+from agent_routing import RoutingDecision, ROLE_KEYS, route_task
 from agent_tools import (
     build_default_tools,
     default_formatter,
@@ -41,6 +43,27 @@ class OllamaAgent:
         self.heartbeat_seconds = int(os.getenv("AGENT_HEARTBEAT_SECONDS", "5"))
         self.ollama_num_ctx = self.parse_optional_int(os.getenv("OLLAMA_NUM_CTX"))
         self.current_task_history_items = int(os.getenv("AGENT_CURRENT_TASK_HISTORY_ITEMS", "12"))
+        self.routing_enabled = os.getenv("AGENT_ROUTING_ENABLED", "true").strip().lower() not in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }
+        self.routing_quality_mode = os.getenv("AGENT_ROUTING_QUALITY", "balanced").strip().lower()
+        self.routing_roles = {
+            "router": os.getenv("OLLAMA_ROUTER_MODEL", "").strip(),
+            "planner": os.getenv("OLLAMA_PLANNER_MODEL", "").strip(),
+            "coding": os.getenv("OLLAMA_CODING_MODEL", "").strip(),
+            "vision": os.getenv("OLLAMA_VISION_MODEL", "").strip(),
+        }
+        self.routing_debug_enabled = os.getenv(
+            "AGENT_ROUTING_DEBUG_LOG",
+            "",
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        self.routing_debug_file = os.getenv(
+            "AGENT_ROUTING_DEBUG_FILE",
+            ".agent_routing_debug.jsonl",
+        ).strip() or ".agent_routing_debug.jsonl"
 
         self.memory_summary_file = os.path.join(self.working_dir, ".agent_memory_summary.txt")
         self.max_memory_summary_chars = int(os.getenv("AGENT_MAX_MEMORY_SUMMARY_CHARS", "12000"))
@@ -109,6 +132,93 @@ class OllamaAgent:
             return "nothink"
 
         return str(self.think_mode)
+
+    # -------------------------
+    # Routing
+    # -------------------------
+
+    def set_routing_enabled(self, value: object) -> bool:
+        if isinstance(value, bool):
+            self.routing_enabled = value
+        else:
+            text = str(value).strip().lower()
+            self.routing_enabled = text not in {"0", "false", "no", "off"}
+
+        return self.routing_enabled
+
+    def set_routing_quality_mode(self, value: object) -> str:
+        text = str(value or "").strip().lower()
+
+        if text not in {"economy", "balanced", "high_quality"}:
+            text = "balanced"
+
+        self.routing_quality_mode = text
+        return self.routing_quality_mode
+
+    def set_routing_roles(self, roles: Dict[str, object] | None) -> Dict[str, str]:
+        roles = roles or {}
+
+        for key in ROLE_KEYS:
+            self.routing_roles[key] = str(roles.get(key, "") or "").strip()
+
+        return self.routing_roles
+
+    def set_routing_debug_enabled(self, value: object) -> bool:
+        if isinstance(value, bool):
+            self.routing_debug_enabled = value
+        else:
+            text = str(value).strip().lower()
+            self.routing_debug_enabled = text in {"1", "true", "yes", "on"}
+
+        return self.routing_debug_enabled
+
+    def routing_debug_path(self) -> str:
+        return self.safe_path(self.routing_debug_file)
+
+    def log_routing_decision(self, task: str, decision: RoutingDecision) -> None:
+        if not self.routing_debug_enabled:
+            return
+
+        try:
+            path = self.routing_debug_path()
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+
+            record = {
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                "task_preview": task[:500],
+                "decision": decision.to_dict(),
+            }
+
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except Exception as exc:
+            print(f"Could not write routing debug log: {exc}")
+
+    def route_current_task(
+        self,
+        task: str,
+        conversation_context: List[Dict[str, object]] | None = None,
+        task_images: List[str] | None = None,
+    ) -> RoutingDecision:
+        def classifier(prompt: str, model: str) -> str:
+            return self.query_ollama(
+                prompt,
+                timeout=self.model_timeout_seconds,
+                json_mode=True,
+                image_paths=task_images or [],
+                model=model,
+            )
+
+        return route_task(
+            task,
+            default_model=self.model,
+            roles=self.routing_roles,
+            quality_mode=self.routing_quality_mode,
+            enabled=self.routing_enabled,
+            task_images=task_images or [],
+            conversation_context=conversation_context or [],
+            classifier=classifier,
+        )
 
     # -------------------------
     # Memory
@@ -971,6 +1081,7 @@ Rules:
         task: str,
         conversation_context: List[Dict[str, object]] | None = None,
         current_task_history: List[Dict[str, object]] | None = None,
+        routing_decision: RoutingDecision | None = None,
     ) -> str:
         memory_summary = self.load_memory_summary()
 
@@ -988,6 +1099,11 @@ Rules:
             indent=2,
             ensure_ascii=False,
         )
+        routing_text = json.dumps(
+            routing_decision.to_dict() if routing_decision else {},
+            indent=2,
+            ensure_ascii=False,
+        )
 
         return f"""
 You are responding directly to the user.
@@ -1000,6 +1116,9 @@ Recent visible conversation context:
 
 Current task tool/action history:
 {current_task_history_text or "[]"}
+
+Routing decision:
+{routing_text}
 
 Current user message:
 {task}
@@ -1020,6 +1139,7 @@ Instructions:
         history: List[Dict[str, object]],
         conversation_context: List[Dict[str, object]] | None = None,
         task_images: List[str] | None = None,
+        routing_decision: RoutingDecision | None = None,
     ) -> str:
         history_text = json.dumps(
             history[-self.current_task_history_items:],
@@ -1033,6 +1153,11 @@ Instructions:
         conversation_context = conversation_context or []
         conversation_context_text = json.dumps(
             conversation_context,
+            indent=2,
+            ensure_ascii=False,
+        )
+        routing_text = json.dumps(
+            routing_decision.to_dict() if routing_decision else {},
             indent=2,
             ensure_ascii=False,
         )
@@ -1058,6 +1183,9 @@ Previous steps and observations for this current task:
 Uploaded images available to the model:
 {json.dumps(task_images or [], indent=2, ensure_ascii=False)}
 
+Routing decision:
+{routing_text}
+
 You must respond with exactly one JSON object. No markdown. No explanations outside JSON.
 
 Available actions:
@@ -1072,6 +1200,7 @@ Rules:
 - Give a useful short summary on every iteration.
 - If modifying an existing file, read it first unless its content is already in the task history.
 - For HTML tasks, write a complete standalone HTML file.
+- This local-only v1 has no bitmap image-generation tool. If the routing decision says task_type is image_generation, create code-native visual output only when the user asked for a file/page; otherwise explain that local image generation is not configured.
 - Finish only when the task is actually complete.
 - The user should always receive a useful message, not only "Task completed."
 """.strip()
@@ -1094,6 +1223,8 @@ Rules:
         progress_callback: ProgressCallback = None,
         conversation_context: List[Dict[str, object]] | None = None,
         task_images: List[str] | None = None,
+        selected_model: str | None = None,
+        routing_decision: RoutingDecision | None = None,
     ) -> str:
         history: List[Dict[str, object]] = []
         successful_action_counts: Dict[str, int] = {}
@@ -1117,6 +1248,7 @@ Rules:
                 history,
                 conversation_context=conversation_context,
                 task_images=task_images,
+                routing_decision=routing_decision,
             )
 
             emit({
@@ -1131,6 +1263,7 @@ Rules:
                 progress_callback=progress_callback,
                 json_mode=True,
                 image_paths=task_images,
+                model=selected_model,
             )
 
             emit({
@@ -1202,6 +1335,7 @@ Rules:
                     task,
                     conversation_context=conversation_context,
                     current_task_history=history,
+                    routing_decision=routing_decision,
                 )
 
                 message = self.query_ollama(
@@ -1210,6 +1344,7 @@ Rules:
                     progress_callback=progress_callback,
                     json_mode=False,
                     image_paths=task_images,
+                    model=selected_model,
                 )
 
                 history.append({

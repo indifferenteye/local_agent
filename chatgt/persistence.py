@@ -64,6 +64,16 @@ def load_settings() -> None:
                     f"{state.CONTEXT_TARGET_TOKENS} target tokens"
                 )
 
+            routing_settings = data.get("routing")
+            if isinstance(routing_settings, dict):
+                state.update_routing_settings(routing_settings)
+                print(
+                    "Loaded routing settings: "
+                    f"enabled={state.agent.routing_enabled}, "
+                    f"quality={state.agent.routing_quality_mode}, "
+                    f"debug={state.agent.routing_debug_enabled}"
+                )
+
     except Exception as exc:
         print(f"Could not load settings file: {exc}")
 
@@ -82,6 +92,12 @@ def save_settings() -> None:
                         "recent_context_chars": state.RECENT_CONVERSATION_CONTEXT_CHARS,
                         "context_target_tokens": state.CONTEXT_TARGET_TOKENS,
                         "ollama_num_ctx": state.agent.ollama_num_ctx,
+                    },
+                    "routing": {
+                        "enabled": state.agent.routing_enabled,
+                        "quality_mode": state.agent.routing_quality_mode,
+                        "debug_logging": state.agent.routing_debug_enabled,
+                        "roles": state.agent.routing_roles,
                     },
                 },
                 f,

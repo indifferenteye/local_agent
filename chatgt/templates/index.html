@@ -146,6 +146,34 @@
             color: #f3f7fb;
         }
 
+        .settings-grid select {
+            width: 100%;
+            border: 1px solid #314153;
+            border-radius: 8px;
+            padding: 8px 10px;
+            font: inherit;
+            font-size: 13px;
+            background: #101820;
+            color: #f3f7fb;
+        }
+
+        .settings-grid input[type="checkbox"] {
+            width: auto;
+            justify-self: start;
+        }
+
+        .settings-section-title {
+            margin: 18px 0 10px;
+            color: #f3f7fb;
+            font-weight: 700;
+        }
+
+        .settings-note {
+            color: #9fb0c2;
+            font-size: 12px;
+            margin: 10px 0 0;
+        }
+
         .settings-actions {
             margin-top: 14px;
             display: flex;
@@ -448,7 +476,7 @@
         <div class="header-actions">
             <label class="model-label" for="modelSelect">Model</label>
             <select class="model-select" id="modelSelect"></select>
-            <button class="small-button" id="contextSettings" title="Context settings">Context</button>
+            <button class="small-button" id="contextSettings" title="Settings">Settings</button>
             <button class="small-button" id="help">Help</button>
             <button class="small-button" id="clear">Clear chat</button>
         </div>
@@ -505,11 +533,12 @@
     <div class="modal-backdrop" id="contextModal" hidden>
         <div class="modal">
             <div class="modal-header">
-                <strong>Context settings</strong>
+                <strong>Settings</strong>
                 <button class="small-button" id="closeContext">Close</button>
             </div>
 
             <div class="modal-body">
+                <div class="settings-section-title">Context</div>
                 <div class="settings-grid">
                     <label for="recentContextMessages">Recent messages kept verbatim</label>
                     <input id="recentContextMessages" type="number" min="2" max="100" step="1" />
@@ -525,6 +554,39 @@
                 </div>
 
                 <p id="contextStatus"></p>
+
+                <div class="settings-section-title">Routing</div>
+                <div class="settings-grid">
+                    <label for="routingEnabled">Auto-routing enabled</label>
+                    <input id="routingEnabled" type="checkbox" />
+
+                    <label for="routingQuality">Quality policy</label>
+                    <select id="routingQuality">
+                        <option value="economy">Economy</option>
+                        <option value="balanced">Balanced</option>
+                        <option value="high_quality">High quality</option>
+                    </select>
+
+                    <label for="routingDebugLogging">Routing debug log</label>
+                    <input id="routingDebugLogging" type="checkbox" />
+
+                    <label for="routerModel">Router model</label>
+                    <select id="routerModel"></select>
+
+                    <label for="plannerModel">Planner model</label>
+                    <select id="plannerModel"></select>
+
+                    <label for="codingModel">Coding model</label>
+                    <select id="codingModel"></select>
+
+                    <label for="visionModel">Vision model</label>
+                    <select id="visionModel"></select>
+                </div>
+
+                <p class="settings-note">
+                    Empty routing roles fall back to the selected default model.
+                    Debug logging writes technical routing details to <code id="routingDebugFile">.agent_routing_debug.jsonl</code>.
+                </p>
 
                 <div class="settings-actions">
                     <button class="small-button" id="saveContext">Save</button>
@@ -569,11 +631,20 @@
         const contextTargetTokensInput = document.getElementById("contextTargetTokens");
         const ollamaNumCtxInput = document.getElementById("ollamaNumCtx");
         const contextStatus = document.getElementById("contextStatus");
+        const routingEnabledInput = document.getElementById("routingEnabled");
+        const routingQualitySelect = document.getElementById("routingQuality");
+        const routingDebugLoggingInput = document.getElementById("routingDebugLogging");
+        const routingDebugFile = document.getElementById("routingDebugFile");
+        const routerModelSelect = document.getElementById("routerModel");
+        const plannerModelSelect = document.getElementById("plannerModel");
+        const codingModelSelect = document.getElementById("codingModel");
+        const visionModelSelect = document.getElementById("visionModel");
         const modelSelect = document.getElementById("modelSelect");
         const meta = document.getElementById("meta");
 
         let lastRenderedSignature = "";
         let renderTimer = null;
+        let installedModels = [];
 
         function scrollToBottomSoon() {
             requestAnimationFrame(() => {
@@ -797,23 +868,67 @@
             const context = data.context || {};
             const status = context.status || {};
             const numCtx = context.ollama_num_ctx ? String(context.ollama_num_ctx) : "default";
+            const routing = context.routing || {};
+            const routingMode = routing.enabled === false
+                ? "off"
+                : (routing.quality_mode || "balanced");
 
             meta.textContent =
                 "Model: " + (data.current_model || data.model || "") +
                 " | Think: " + (data.think_mode || "default") +
+                " | Routing: " + routingMode +
                 " | Context: " + (status.recent_messages || 0) + " recent / " +
                 (status.memory_summary_chars || 0) + " summary chars / num_ctx " + numCtx +
                 " | Workdir: " + (data.workdir || "");
         }
 
+        function populateRoleSelect(select, selectedValue) {
+            const value = selectedValue || "";
+            select.innerHTML = "";
+
+            const fallbackOption = document.createElement("option");
+            fallbackOption.value = "";
+            fallbackOption.textContent = "Default model fallback";
+            select.appendChild(fallbackOption);
+
+            for (const model of installedModels) {
+                const option = document.createElement("option");
+                option.value = model;
+                option.textContent = model;
+
+                if (model === value) {
+                    option.selected = true;
+                }
+
+                select.appendChild(option);
+            }
+
+            select.value = value;
+        }
+
+        function populateRoutingRoleSelects(roles) {
+            roles = roles || {};
+            populateRoleSelect(routerModelSelect, roles.router || "");
+            populateRoleSelect(plannerModelSelect, roles.planner || "");
+            populateRoleSelect(codingModelSelect, roles.coding || "");
+            populateRoleSelect(visionModelSelect, roles.vision || "");
+        }
+
         function applyContextForm(data) {
             const context = data.context || data || {};
             const status = context.status || {};
+            const routing = context.routing || {};
+            const roles = routing.roles || {};
 
             recentContextMessagesInput.value = context.recent_context_messages || "";
             recentContextCharsInput.value = context.recent_context_chars || "";
             contextTargetTokensInput.value = context.context_target_tokens || "";
             ollamaNumCtxInput.value = context.ollama_num_ctx || "";
+            routingEnabledInput.checked = routing.enabled !== false;
+            routingQualitySelect.value = routing.quality_mode || "balanced";
+            routingDebugLoggingInput.checked = routing.debug_logging === true;
+            routingDebugFile.textContent = routing.debug_log_file || ".agent_routing_debug.jsonl";
+            populateRoutingRoleSelects(roles);
 
             contextStatus.textContent =
                 "Current prompt context: " + (status.recent_messages || 0) +
@@ -835,8 +950,9 @@
                 const data = await res.json();
 
                 modelSelect.innerHTML = "";
+                installedModels = data.models || [];
 
-                for (const model of data.models || []) {
+                for (const model of installedModels) {
                     const option = document.createElement("option");
                     option.value = model;
                     option.textContent = model;
@@ -848,13 +964,16 @@
                     modelSelect.appendChild(option);
                 }
 
-                if ((data.models || []).length === 0) {
+                if (installedModels.length === 0) {
                     const option = document.createElement("option");
                     option.value = "";
                     option.textContent = "No models found";
                     modelSelect.appendChild(option);
                     modelSelect.disabled = true;
                 }
+
+                const roles = (((data.context || {}).routing || {}).roles) || {};
+                populateRoutingRoleSelects(roles);
 
                 setMeta(data);
 
@@ -874,6 +993,13 @@
                 imageInput.disabled = data.running === true;
                 modelSelect.disabled = data.running === true;
                 contextSettingsButton.disabled = data.running === true;
+                routerModelSelect.disabled = data.running === true;
+                plannerModelSelect.disabled = data.running === true;
+                codingModelSelect.disabled = data.running === true;
+                visionModelSelect.disabled = data.running === true;
+                routingEnabledInput.disabled = data.running === true;
+                routingQualitySelect.disabled = data.running === true;
+                routingDebugLoggingInput.disabled = data.running === true;
 
                 setMeta(data);
             } catch (err) {
@@ -1015,7 +1141,18 @@
                     recent_context_messages: recentContextMessagesInput.value,
                     recent_context_chars: recentContextCharsInput.value,
                     context_target_tokens: contextTargetTokensInput.value,
-                    ollama_num_ctx: ollamaNumCtxInput.value
+                    ollama_num_ctx: ollamaNumCtxInput.value,
+                    routing: {
+                        enabled: routingEnabledInput.checked,
+                        quality_mode: routingQualitySelect.value,
+                        debug_logging: routingDebugLoggingInput.checked,
+                        roles: {
+                            router: routerModelSelect.value,
+                            planner: plannerModelSelect.value,
+                            coding: codingModelSelect.value,
+                            vision: visionModelSelect.value
+                        }
+                    }
                 };
 
                 const res = await fetch("/context-settings", {
