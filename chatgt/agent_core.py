@@ -39,6 +39,8 @@ class OllamaAgent:
         self.browser_timeout_ms = int(os.getenv("AGENT_BROWSER_TIMEOUT_MS", "20000"))
         self.model_timeout_seconds = int(os.getenv("AGENT_MODEL_TIMEOUT_SECONDS", "240"))
         self.heartbeat_seconds = int(os.getenv("AGENT_HEARTBEAT_SECONDS", "5"))
+        self.ollama_num_ctx = self.parse_optional_int(os.getenv("OLLAMA_NUM_CTX"))
+        self.current_task_history_items = int(os.getenv("AGENT_CURRENT_TASK_HISTORY_ITEMS", "12"))
 
         self.memory_summary_file = os.path.join(self.working_dir, ".agent_memory_summary.txt")
         self.max_memory_summary_chars = int(os.getenv("AGENT_MAX_MEMORY_SUMMARY_CHARS", "12000"))
@@ -49,6 +51,21 @@ class OllamaAgent:
         self.tools = build_default_tools(self)
 
         os.makedirs(self.working_dir, exist_ok=True)
+
+    def parse_optional_int(self, value: object) -> int | None:
+        if value is None:
+            return None
+
+        text = str(value).strip()
+        if not text:
+            return None
+
+        try:
+            parsed = int(text)
+        except ValueError:
+            return None
+
+        return parsed if parsed > 0 else None
 
     # -------------------------
     # Thinking mode
@@ -164,7 +181,12 @@ Rules:
 - Return only the updated memory summary as plain text.
 """.strip()
 
-        summary = self.query_ollama(prompt, timeout=self.model_timeout_seconds)
+        summary_model = os.getenv("AGENT_MEMORY_SUMMARY_MODEL", "").strip() or None
+        summary = self.query_ollama(
+            prompt,
+            timeout=self.model_timeout_seconds,
+            model=summary_model,
+        )
 
         if summary.startswith("Error"):
             return existing_summary
@@ -229,6 +251,7 @@ Rules:
         progress_callback: ProgressCallback = None,
         json_mode: bool = False,
         image_paths: List[str] | None = None,
+        model: str | None = None,
     ) -> str:
         if not self.wait_for_ollama():
             return "Error: Ollama is not responding after waiting"
@@ -244,13 +267,16 @@ Rules:
         def request_worker() -> None:
             try:
                 payload = {
-                    "model": self.model,
+                    "model": model or self.model,
                     "prompt": prompt,
                     "stream": False,
                     "options": {
                         "num_predict": int(os.getenv("OLLAMA_NUM_PREDICT", "2048")),
                     },
                 }
+
+                if self.ollama_num_ctx:
+                    payload["options"]["num_ctx"] = self.ollama_num_ctx
 
                 if json_mode:
                     payload["format"] = "json"
@@ -952,13 +978,13 @@ Rules:
         current_task_history = current_task_history or []
 
         conversation_context_text = json.dumps(
-            conversation_context[-20:],
+            conversation_context,
             indent=2,
             ensure_ascii=False,
         )
 
         current_task_history_text = json.dumps(
-            current_task_history[-12:],
+            current_task_history[-self.current_task_history_items:],
             indent=2,
             ensure_ascii=False,
         )
@@ -995,14 +1021,18 @@ Instructions:
         conversation_context: List[Dict[str, object]] | None = None,
         task_images: List[str] | None = None,
     ) -> str:
-        history_text = json.dumps(history[-12:], indent=2, ensure_ascii=False)
+        history_text = json.dumps(
+            history[-self.current_task_history_items:],
+            indent=2,
+            ensure_ascii=False,
+        )
         memory_summary = self.load_memory_summary()
         tool_prompt = render_tool_prompt(self.tools)
         tool_rules = render_tool_rules()
 
         conversation_context = conversation_context or []
         conversation_context_text = json.dumps(
-            conversation_context[-20:],
+            conversation_context,
             indent=2,
             ensure_ascii=False,
         )

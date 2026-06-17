@@ -123,6 +123,36 @@
             color: #d7e2ee;
         }
 
+        .settings-grid {
+            display: grid;
+            grid-template-columns: minmax(180px, 1fr) minmax(160px, 220px);
+            gap: 12px;
+            align-items: center;
+        }
+
+        .settings-grid label {
+            color: #d7e2ee;
+            font-size: 13px;
+        }
+
+        .settings-grid input {
+            width: 100%;
+            border: 1px solid #314153;
+            border-radius: 8px;
+            padding: 8px 10px;
+            font: inherit;
+            font-size: 13px;
+            background: #101820;
+            color: #f3f7fb;
+        }
+
+        .settings-actions {
+            margin-top: 14px;
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+        }
+
         .modal-body table {
             width: 100%;
             border-collapse: collapse;
@@ -418,6 +448,7 @@
         <div class="header-actions">
             <label class="model-label" for="modelSelect">Model</label>
             <select class="model-select" id="modelSelect"></select>
+            <button class="small-button" id="contextSettings" title="Context settings">Context</button>
             <button class="small-button" id="help">Help</button>
             <button class="small-button" id="clear">Clear chat</button>
         </div>
@@ -471,6 +502,37 @@
         </div>
     </div>
 
+    <div class="modal-backdrop" id="contextModal" hidden>
+        <div class="modal">
+            <div class="modal-header">
+                <strong>Context settings</strong>
+                <button class="small-button" id="closeContext">Close</button>
+            </div>
+
+            <div class="modal-body">
+                <div class="settings-grid">
+                    <label for="recentContextMessages">Recent messages kept verbatim</label>
+                    <input id="recentContextMessages" type="number" min="2" max="100" step="1" />
+
+                    <label for="recentContextChars">Max chars per recent message</label>
+                    <input id="recentContextChars" type="number" min="500" max="50000" step="500" />
+
+                    <label for="contextTargetTokens">Prompt context target tokens</label>
+                    <input id="contextTargetTokens" type="number" min="2048" max="256000" step="1024" />
+
+                    <label for="ollamaNumCtx">Ollama num_ctx override</label>
+                    <input id="ollamaNumCtx" type="number" min="2048" max="256000" step="1024" placeholder="Use model/server default" />
+                </div>
+
+                <p id="contextStatus"></p>
+
+                <div class="settings-actions">
+                    <button class="small-button" id="saveContext">Save</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div class="meta" id="meta">
         Model: {{ model }} | Think: {{ think_mode }} | Workdir: {{ workdir }}
     </div>
@@ -496,8 +558,17 @@
         const selectedFiles = document.getElementById("selectedFiles");
         const clearButton = document.getElementById("clear");
         const helpButton = document.getElementById("help");
+        const contextSettingsButton = document.getElementById("contextSettings");
         const helpModal = document.getElementById("helpModal");
+        const contextModal = document.getElementById("contextModal");
         const closeHelpButton = document.getElementById("closeHelp");
+        const closeContextButton = document.getElementById("closeContext");
+        const saveContextButton = document.getElementById("saveContext");
+        const recentContextMessagesInput = document.getElementById("recentContextMessages");
+        const recentContextCharsInput = document.getElementById("recentContextChars");
+        const contextTargetTokensInput = document.getElementById("contextTargetTokens");
+        const ollamaNumCtxInput = document.getElementById("ollamaNumCtx");
+        const contextStatus = document.getElementById("contextStatus");
         const modelSelect = document.getElementById("modelSelect");
         const meta = document.getElementById("meta");
 
@@ -700,6 +771,44 @@
             }
         }
 
+        function setMeta(data) {
+            if (!data) return;
+
+            const context = data.context || {};
+            const status = context.status || {};
+            const numCtx = context.ollama_num_ctx ? String(context.ollama_num_ctx) : "default";
+
+            meta.textContent =
+                "Model: " + (data.current_model || data.model || "") +
+                " | Think: " + (data.think_mode || "default") +
+                " | Context: " + (status.recent_messages || 0) + " recent / " +
+                (status.memory_summary_chars || 0) + " summary chars / num_ctx " + numCtx +
+                " | Workdir: " + (data.workdir || "");
+        }
+
+        function applyContextForm(data) {
+            const context = data.context || data || {};
+            const status = context.status || {};
+
+            recentContextMessagesInput.value = context.recent_context_messages || "";
+            recentContextCharsInput.value = context.recent_context_chars || "";
+            contextTargetTokensInput.value = context.context_target_tokens || "";
+            ollamaNumCtxInput.value = context.ollama_num_ctx || "";
+
+            contextStatus.textContent =
+                "Current prompt context: " + (status.recent_messages || 0) +
+                " recent messages, " + (status.recent_context_chars || 0) +
+                " recent chars, " + (status.memory_summary_chars || 0) +
+                " summary chars.";
+        }
+
+        async function loadContextSettings() {
+            const res = await fetch("/context-settings", { cache: "no-store" });
+            const data = await res.json();
+            applyContextForm(data);
+            return data;
+        }
+
         async function loadModels() {
             try {
                 const res = await fetch("/models", { cache: "no-store" });
@@ -727,10 +836,7 @@
                     modelSelect.disabled = true;
                 }
 
-                meta.textContent =
-                    "Model: " + data.current_model +
-                    " | Think: " + data.think_mode +
-                    " | Workdir: " + data.workdir;
+                setMeta(data);
 
             } catch (err) {
                 console.error("Could not load models:", err);
@@ -747,13 +853,9 @@
                 sendButton.disabled = data.running === true;
                 imageInput.disabled = data.running === true;
                 modelSelect.disabled = data.running === true;
+                contextSettingsButton.disabled = data.running === true;
 
-                if (data.model) {
-                    meta.textContent =
-                        "Model: " + data.model +
-                        " | Think: " + data.think_mode +
-                        " | Workdir: " + data.workdir;
-                }
+                setMeta(data);
             } catch (err) {
                 console.error("Could not load messages:", err);
             }
@@ -870,8 +972,53 @@
             helpModal.hidden = false;
         });
 
+        contextSettingsButton.addEventListener("click", async () => {
+            try {
+                await loadContextSettings();
+                contextModal.hidden = false;
+            } catch (err) {
+                console.error("Could not load context settings:", err);
+            }
+        });
+
         closeHelpButton.addEventListener("click", () => {
             helpModal.hidden = true;
+        });
+
+        closeContextButton.addEventListener("click", () => {
+            contextModal.hidden = true;
+        });
+
+        saveContextButton.addEventListener("click", async () => {
+            try {
+                const payload = {
+                    recent_context_messages: recentContextMessagesInput.value,
+                    recent_context_chars: recentContextCharsInput.value,
+                    context_target_tokens: contextTargetTokensInput.value,
+                    ollama_num_ctx: ollamaNumCtxInput.value
+                };
+
+                const res = await fetch("/context-settings", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!res.ok) {
+                    const err = await res.text();
+                    console.error(err);
+                    return;
+                }
+
+                const data = await res.json();
+                applyContextForm(data);
+                await loadMessages();
+                contextModal.hidden = true;
+            } catch (err) {
+                console.error("Could not save context settings:", err);
+            }
         });
 
         helpModal.addEventListener("click", (e) => {
@@ -880,9 +1027,16 @@
             }
         });
 
+        contextModal.addEventListener("click", (e) => {
+            if (e.target === contextModal) {
+                contextModal.hidden = true;
+            }
+        });
+
         document.addEventListener("keydown", (e) => {
             if (e.key === "Escape") {
                 helpModal.hidden = true;
+                contextModal.hidden = true;
             }
         });
 

@@ -21,6 +21,16 @@ def load_settings() -> None:
             state.agent.set_think_mode(data.get("think_mode"))
             print(f"Loaded think mode: {state.agent.get_think_mode_label()}")
 
+            context_settings = data.get("context")
+            if isinstance(context_settings, dict):
+                state.update_context_settings(context_settings)
+                print(
+                    "Loaded context settings: "
+                    f"{state.RECENT_CONVERSATION_CONTEXT_MESSAGES} messages, "
+                    f"{state.RECENT_CONVERSATION_CONTEXT_CHARS} chars/message, "
+                    f"{state.CONTEXT_TARGET_TOKENS} target tokens"
+                )
+
     except Exception as exc:
         print(f"Could not load settings file: {exc}")
 
@@ -34,6 +44,12 @@ def save_settings() -> None:
                 {
                     "model": state.agent.model,
                     "think_mode": state.agent.think_mode,
+                    "context": {
+                        "recent_context_messages": state.RECENT_CONVERSATION_CONTEXT_MESSAGES,
+                        "recent_context_chars": state.RECENT_CONVERSATION_CONTEXT_CHARS,
+                        "context_target_tokens": state.CONTEXT_TARGET_TOKENS,
+                        "ollama_num_ctx": state.agent.ollama_num_ctx,
+                    },
                 },
                 f,
                 indent=2,

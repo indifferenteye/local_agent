@@ -20,6 +20,9 @@ docker run -it --rm `
   -e AGENT_SUMMARIZE_AFTER_MESSAGES="60" `
   -e AGENT_RECENT_MESSAGES_TO_KEEP="30" `
   -e AGENT_RECENT_CONVERSATION_CONTEXT_MESSAGES="20" `
+  -e AGENT_RECENT_CONVERSATION_CONTEXT_CHARS="6000" `
+  -e AGENT_CONTEXT_TARGET_TOKENS="16000" `
+  -e OLLAMA_NUM_CTX="64000" `
   -e OLLAMA_NUM_PREDICT="4096" `
   ollama-agent
 
@@ -42,3 +45,10 @@ TODO:
 - better system promt, better tools
 - multiple model workflow? (agentic, coding, images etc)
 - ... 
+
+Context notes:
+- The app keeps recent user/agent messages verbatim and compresses older messages into `.agent_memory_summary.txt`.
+- `AGENT_CONTEXT_TARGET_TOKENS` is the app's prompt budgeting target.
+- `OLLAMA_NUM_CTX` is sent to Ollama as `options.num_ctx` when set.
+- For larger local-agent workloads, also configure the Ollama server/app context length. Example: `OLLAMA_CONTEXT_LENGTH=64000 ollama serve`.
+- The app does not persist Ollama's deprecated generated token `context`, so switching models between messages keeps working from text history and summaries.

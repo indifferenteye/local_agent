@@ -11,7 +11,7 @@ import app_state as state
 from chat_images import image_message_data, safe_image_path, save_uploaded_image
 from commands import handle_slash_command
 from events import broadcast, broadcast_message, normalize_progress_event
-from memory import get_recent_conversation_context, maybe_summarize_memory
+from memory import maybe_summarize_memory, prepare_context_for_next_task
 from persistence import load_memory_state, save_memory_state, save_messages, save_settings
 
 
@@ -34,7 +34,18 @@ def register_routes(app) -> None:
                     def progress(event: Any) -> None:
                         broadcast_message(normalize_progress_event(event))
 
-                    conversation_context = get_recent_conversation_context()
+                    context_bundle = prepare_context_for_next_task()
+                    conversation_context = context_bundle["recent_context"]
+                    context_status = context_bundle["status"]
+
+                    broadcast_message(normalize_progress_event({
+                        "kind": "status",
+                        "text": (
+                            "Prepared context: "
+                            f"{context_status['recent_messages']} recent messages, "
+                            f"{context_status['memory_summary_chars']} summary chars"
+                        ),
+                    }))
 
                     final = state.agent.run_agentic_task(
                         task,
@@ -70,6 +81,7 @@ def register_routes(app) -> None:
             "model": state.agent.model,
             "think_mode": state.agent.get_think_mode_label(),
             "workdir": state.agent.working_dir,
+            "context": context_payload(),
         })
 
     @app.route("/models")
@@ -81,6 +93,7 @@ def register_routes(app) -> None:
             "current_model": state.agent.model,
             "think_mode": state.agent.get_think_mode_label(),
             "workdir": state.agent.working_dir,
+            "context": context_payload(),
         })
 
     @app.route("/model", methods=["POST"])
@@ -115,6 +128,35 @@ def register_routes(app) -> None:
             "model": state.agent.model,
             "think_mode": state.agent.get_think_mode_label(),
         })
+
+    def context_payload() -> dict[str, Any]:
+        summary = state.agent.load_memory_summary()
+        recent_context = state.context_manager.recent_conversation(state.messages)
+
+        return {
+            "recent_context_messages": state.RECENT_CONVERSATION_CONTEXT_MESSAGES,
+            "recent_context_chars": state.RECENT_CONVERSATION_CONTEXT_CHARS,
+            "context_target_tokens": state.CONTEXT_TARGET_TOKENS,
+            "ollama_num_ctx": state.agent.ollama_num_ctx,
+            "status": state.context_manager.context_status(summary, recent_context),
+        }
+
+    @app.route("/context-settings", methods=["GET", "POST"])
+    def context_settings():
+        if request.method == "GET":
+            return jsonify(context_payload())
+
+        if state.running:
+            return jsonify({
+                "error": "Cannot change context settings while a task is running",
+            }), 409
+
+        data = request.get_json(force=True)
+        state.update_context_settings(data)
+        save_settings()
+
+        broadcast("status", "Context settings updated")
+        return jsonify(context_payload())
 
     @app.route("/events")
     def events():

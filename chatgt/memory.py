@@ -13,25 +13,7 @@ def get_recent_conversation_context() -> List[Dict[str, Any]]:
     This is separate from long-term memory. It lets the model understand
     follow-ups like "make it rhyme", "change that", "continue", etc.
     """
-    context = []
-
-    for msg in state.messages:
-        role = str(msg.get("role", ""))
-        text = str(msg.get("text", ""))
-
-        if role not in {"user", "agent"}:
-            continue
-
-        if not text.strip():
-            continue
-
-        context.append({
-            "role": role,
-            "text": text[:6000],
-            "timestamp": msg.get("timestamp"),
-        })
-
-    return context[-state.RECENT_CONVERSATION_CONTEXT_MESSAGES:]
+    return state.context_manager.recent_conversation(state.messages)
 
 
 def compact_message_for_memory(msg: Dict[str, Any]) -> Dict[str, Any] | None:
@@ -103,3 +85,22 @@ def maybe_summarize_memory() -> None:
 
     except Exception as exc:
         print(f"Memory summarization failed: {exc}")
+
+
+def prepare_context_for_next_task() -> Dict[str, Any]:
+    """
+    Summarize stale visible messages before prompt construction.
+
+    The visible UI transcript is still retained. This only updates the compact
+    memory layer and then returns the recent conversation slice that should be
+    included verbatim in the next model request.
+    """
+    maybe_summarize_memory()
+
+    recent_context = get_recent_conversation_context()
+    summary = state.agent.load_memory_summary()
+
+    return {
+        "recent_context": recent_context,
+        "status": state.context_manager.context_status(summary, recent_context),
+    }
