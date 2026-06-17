@@ -633,12 +633,26 @@
             return pre;
         }
 
-        function addProgressGroup(progressItems) {
+        function getOpenDetailKeys() {
+            const keys = new Set();
+
+            for (const details of chat.querySelectorAll("details[data-detail-key]")) {
+                if (details.open) {
+                    keys.add(details.dataset.detailKey);
+                }
+            }
+
+            return keys;
+        }
+
+        function addProgressGroup(progressItems, groupIndex, openDetailKeys) {
             const row = makeRow("progress");
+            const groupKey = "progress:" + groupIndex;
 
             const details = document.createElement("details");
             details.className = "progress-group";
-            details.open = false;
+            details.dataset.detailKey = groupKey;
+            details.open = openDetailKeys.has(groupKey);
 
             const summary = document.createElement("summary");
 
@@ -669,9 +683,11 @@
             }
 
             for (const [iteration, items] of steps.entries()) {
+                const stepKey = groupKey + ":step:" + iteration;
                 const step = document.createElement("details");
                 step.className = "step";
-                step.open = false;
+                step.dataset.detailKey = stepKey;
+                step.open = openDetailKeys.has(stepKey);
 
                 const stepSummary = document.createElement("summary");
 
@@ -727,12 +743,15 @@
                 return;
             }
 
+            const openDetailKeys = getOpenDetailKeys();
+
             const wasNearBottom =
                 chat.scrollTop + chat.clientHeight >= chat.scrollHeight - 120;
 
             chat.innerHTML = "";
 
             let pendingProgress = [];
+            let progressGroupIndex = 0;
 
             for (const msg of messages) {
                 if (msg.role === "progress") {
@@ -741,7 +760,8 @@
                 }
 
                 if (pendingProgress.length > 0) {
-                    addProgressGroup(pendingProgress);
+                    addProgressGroup(pendingProgress, progressGroupIndex, openDetailKeys);
+                    progressGroupIndex += 1;
                     pendingProgress = [];
                 }
 
@@ -753,7 +773,7 @@
             }
 
             if (pendingProgress.length > 0) {
-                addProgressGroup(pendingProgress);
+                addProgressGroup(pendingProgress, progressGroupIndex, openDetailKeys);
             }
 
             lastRenderedSignature = signature;
