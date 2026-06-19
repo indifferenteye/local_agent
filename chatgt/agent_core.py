@@ -6,11 +6,13 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import threading
 import time
 from typing import Callable, Dict, List, Optional, Union
-from urllib.parse import urlparse
+from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 import requests
 
@@ -43,6 +45,9 @@ class OllamaAgent:
         self.heartbeat_seconds = int(os.getenv("AGENT_HEARTBEAT_SECONDS", "5"))
         self.ollama_num_ctx = self.parse_optional_int(os.getenv("OLLAMA_NUM_CTX"))
         self.current_task_history_items = int(os.getenv("AGENT_CURRENT_TASK_HISTORY_ITEMS", "12"))
+        self.current_task_history_content_chars = int(
+            os.getenv("AGENT_CURRENT_TASK_HISTORY_CONTENT_CHARS", "24000")
+        )
         self.routing_enabled = os.getenv("AGENT_ROUTING_ENABLED", "true").strip().lower() not in {
             "0",
             "false",
@@ -56,14 +61,29 @@ class OllamaAgent:
             "coding": os.getenv("OLLAMA_CODING_MODEL", "").strip(),
             "vision": os.getenv("OLLAMA_VISION_MODEL", "").strip(),
         }
-        self.routing_debug_enabled = os.getenv(
+        legacy_routing_debug_enabled = os.getenv(
             "AGENT_ROUTING_DEBUG_LOG",
             "",
         ).strip().lower() in {"1", "true", "yes", "on"}
-        self.routing_debug_file = os.getenv(
-            "AGENT_ROUTING_DEBUG_FILE",
-            ".agent_routing_debug.jsonl",
-        ).strip() or ".agent_routing_debug.jsonl"
+        legacy_workflow_log_level = os.getenv("AGENT_WORKFLOW_LOG_LEVEL", "").strip().lower()
+        self.run_log_level = os.getenv("AGENT_RUN_LOG_LEVEL", "").strip().lower()
+        if not self.run_log_level:
+            self.run_log_level = legacy_workflow_log_level or (
+                "full" if legacy_routing_debug_enabled else "off"
+            )
+        if self.run_log_level not in {"off", "minimal", "full"}:
+            self.run_log_level = "off"
+        self.run_log_file = os.getenv("AGENT_RUN_LOG_FILE", ".agent_runs.jsonl").strip()
+        if not self.run_log_file:
+            self.run_log_file = ".agent_runs.jsonl"
+        self.run_log_detail_dir = os.getenv(
+            "AGENT_RUN_LOG_DETAIL_DIR",
+            ".agent_run_details",
+        ).strip()
+        if not self.run_log_detail_dir:
+            self.run_log_detail_dir = ".agent_run_details"
+        self.run_log_preview_chars = int(os.getenv("AGENT_RUN_LOG_PREVIEW_CHARS", "1200"))
+        self._run_log_detail_counter = 0
 
         self.memory_summary_file = os.path.join(self.working_dir, ".agent_memory_summary.txt")
         self.max_memory_summary_chars = int(os.getenv("AGENT_MAX_MEMORY_SUMMARY_CHARS", "12000"))
@@ -89,6 +109,19 @@ class OllamaAgent:
             return None
 
         return parsed if parsed > 0 else None
+
+    def compact_content_for_history(self, content: str) -> tuple[str, bool]:
+        max_chars = max(1000, self.current_task_history_content_chars)
+        if len(content) <= max_chars:
+            return content, False
+
+        marker = (
+            "\n\n[... middle content truncated for prompt history; "
+            "the beginning and end of the content are shown ...]\n\n"
+        )
+        head_chars = max(1, (max_chars - len(marker)) // 2)
+        tail_chars = max(1, max_chars - len(marker) - head_chars)
+        return f"{content[:head_chars]}{marker}{content[-tail_chars:]}", True
 
     # -------------------------
     # Thinking mode
@@ -163,36 +196,172 @@ class OllamaAgent:
 
         return self.routing_roles
 
-    def set_routing_debug_enabled(self, value: object) -> bool:
-        if isinstance(value, bool):
-            self.routing_debug_enabled = value
-        else:
-            text = str(value).strip().lower()
-            self.routing_debug_enabled = text in {"1", "true", "yes", "on"}
+    def set_run_log_level(self, value: object) -> str:
+        text = str(value or "").strip().lower()
+        if text not in {"off", "minimal", "full"}:
+            text = "off"
 
-        return self.routing_debug_enabled
+        self.run_log_level = text
+        return self.run_log_level
 
-    def routing_debug_path(self) -> str:
-        return self.safe_path(self.routing_debug_file)
+    def run_log_path(self) -> str:
+        return self.safe_path(self.run_log_file)
 
-    def log_routing_decision(self, task: str, decision: RoutingDecision) -> None:
-        if not self.routing_debug_enabled:
+    def run_log_detail_path(self, run_id: str | None, filename: str) -> str:
+        safe_run_id = self.slugify_log_name(run_id or "global")
+        return self.safe_path(os.path.join(self.run_log_detail_dir, safe_run_id, filename))
+
+    def clear_run_logs(self) -> None:
+        log_path = self.run_log_path()
+        detail_path = self.safe_path(self.run_log_detail_dir)
+
+        if os.path.isfile(log_path):
+            os.remove(log_path)
+
+        if os.path.isdir(detail_path):
+            shutil.rmtree(detail_path)
+
+    def slugify_log_name(self, value: object) -> str:
+        text = str(value or "").strip().lower()
+        text = re.sub(r"[^a-z0-9._-]+", "-", text)
+        text = text.strip("-._")
+        return text[:80] or "item"
+
+    def should_log_run_event(self, level: str = "minimal") -> bool:
+        if self.run_log_level == "off":
+            return False
+        if level == "full" and self.run_log_level != "full":
+            return False
+        return True
+
+    def append_run_log(
+        self,
+        scope: str,
+        event: str,
+        data: Dict[str, object] | None = None,
+        level: str = "minimal",
+        run_id: str | None = None,
+    ) -> None:
+        if not self.should_log_run_event(level):
             return
 
         try:
-            path = self.routing_debug_path()
+            path = self.run_log_path()
             os.makedirs(os.path.dirname(path), exist_ok=True)
-
             record = {
                 "timestamp": datetime.now().isoformat(timespec="seconds"),
-                "task_preview": task[:500],
-                "decision": decision.to_dict(),
+                "level": level,
+                "scope": scope,
+                "event": event,
             }
+            if run_id:
+                record["run_id"] = run_id
+            if data:
+                record["data"] = self.compact_run_log_data(data, level, run_id, scope, event)
 
             with open(path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
         except Exception as exc:
-            print(f"Could not write routing debug log: {exc}")
+            print(f"Could not write run log: {exc}")
+
+    def compact_run_log_data(
+        self,
+        value: object,
+        level: str,
+        run_id: str | None,
+        scope: str,
+        event: str,
+        path: str = "data",
+    ) -> object:
+        if isinstance(value, dict):
+            return {
+                str(key): self.compact_run_log_data(
+                    item,
+                    level,
+                    run_id,
+                    scope,
+                    event,
+                    f"{path}.{self.slugify_log_name(key)}",
+                )
+                for key, item in value.items()
+            }
+
+        if isinstance(value, list):
+            return [
+                self.compact_run_log_data(item, level, run_id, scope, event, f"{path}.{index}")
+                for index, item in enumerate(value)
+            ]
+
+        if not isinstance(value, str):
+            return value
+
+        key_name = path.rsplit(".", 1)[-1]
+        compact_threshold = self.run_log_preview_chars
+        if key_name == "summary" or ".findings." in path:
+            compact_threshold = 300
+
+        should_externalize = (
+            level == "full"
+            and (
+                key_name in {"prompt", "raw-output", "raw_output"}
+                or len(value) > compact_threshold
+            )
+        )
+        should_preview = should_externalize or len(value) > compact_threshold
+
+        if not should_preview:
+            return value
+
+        preview = value[:compact_threshold]
+        compacted: Dict[str, object] = {
+            "preview": preview,
+            "truncated": len(value) > len(preview),
+            "chars": len(value),
+        }
+
+        if should_externalize:
+            details_ref = self.write_run_log_detail(value, run_id, scope, event, path)
+            if details_ref:
+                compacted["details_ref"] = details_ref
+
+        return compacted
+
+    def write_run_log_detail(
+        self,
+        value: str,
+        run_id: str | None,
+        scope: str,
+        event: str,
+        path: str,
+    ) -> str | None:
+        try:
+            self._run_log_detail_counter += 1
+            filename = (
+                f"{self._run_log_detail_counter:04d}-"
+                f"{self.slugify_log_name(scope)}-"
+                f"{self.slugify_log_name(event)}-"
+                f"{self.slugify_log_name(path)}.txt"
+            )
+            detail_path = self.run_log_detail_path(run_id, filename)
+            os.makedirs(os.path.dirname(detail_path), exist_ok=True)
+            with open(detail_path, "w", encoding="utf-8") as f:
+                f.write(value)
+
+            return os.path.relpath(detail_path, self.working_dir).replace(os.sep, "/")
+        except Exception as exc:
+            print(f"Could not write run log detail: {exc}")
+            return None
+
+    def log_routing_decision(self, task: str, decision: RoutingDecision) -> None:
+        self.append_run_log(
+            "routing",
+            "routing_decision",
+            {
+                "task_preview": task[:500],
+                "decision": decision.to_dict(),
+            },
+            level="minimal",
+        )
 
     def route_current_task(
         self,
@@ -458,6 +627,33 @@ Rules:
             raise ValueError("Refusing to access path outside working directory")
 
         return path
+
+    def browser_url(self, url: str) -> str:
+        value = url.strip()
+        parsed = urlparse(value)
+
+        if parsed.scheme in {"http", "https"}:
+            if not parsed.netloc:
+                raise ValueError("URL is missing a host")
+            return value
+
+        if parsed.scheme == "file":
+            local_path = unquote(parsed.path)
+            if os.name == "nt" and re.match(r"^/[A-Za-z]:/", local_path):
+                local_path = local_path[1:]
+            path = os.path.abspath(local_path)
+            base = os.path.abspath(self.working_dir)
+            if path != base and not path.startswith(base + os.sep):
+                raise ValueError("Refusing to open file outside working directory")
+        elif parsed.scheme:
+            raise ValueError("Only http, https, file, or workspace-relative paths are supported")
+        else:
+            path = self.safe_path(value)
+
+        if not os.path.isfile(path):
+            raise ValueError(f"File does not exist: {url}")
+
+        return Path(path).resolve().as_uri()
 
     def encode_images(self, filenames: List[str]) -> List[str]:
         encoded = []
@@ -787,7 +983,6 @@ Rules:
                 })).filter(item => item.text)
                 """
             )
-
             return {
                 "success": True,
                 "url": url,
@@ -807,27 +1002,18 @@ Rules:
     def browser_open(self, url: str) -> Dict[str, object]:
         try:
             url = url.strip()
-            parsed = urlparse(url)
-
-            if parsed.scheme not in {"http", "https"}:
-                return {
-                    "success": False,
-                    "error": "Only http and https URLs are supported",
-                    "url": url,
-                }
-
-            if not parsed.netloc:
-                return {
-                    "success": False,
-                    "error": "URL is missing a host",
-                    "url": url,
-                }
+            browser_url = self.browser_url(url)
 
             page = self.ensure_browser_page()
-            response = page.goto(url, wait_until="domcontentloaded", timeout=self.browser_timeout_ms)
+            response = page.goto(browser_url, wait_until="domcontentloaded", timeout=self.browser_timeout_ms)
+            try:
+                page.wait_for_timeout(500)
+            except Exception:
+                pass
 
             snapshot = self.browser_snapshot()
             snapshot["status_code"] = response.status if response else None
+            snapshot["opened_url"] = browser_url
             return snapshot
 
         except Exception as exc:
@@ -1076,12 +1262,135 @@ Rules:
         formatter = tool.formatter if tool and tool.formatter else default_formatter
         return formatter(observation)
 
+    def is_structured_workflow_result(self, value: object) -> bool:
+        if not isinstance(value, dict):
+            return False
+
+        status = str(value.get("status", "")).strip().lower()
+        if status in {"needed_changes", "need_changes", "needs change", "needed changes"}:
+            value["status"] = "needs_changes"
+            status = "needs_changes"
+        if status not in {"passed", "failed", "needs_changes", "blocked", "skipped"}:
+            return False
+
+        return "summary" in value and "findings" in value and "artifacts" in value
+
+    def normalize_structured_workflow_result(self, value: Dict[str, object]) -> Dict[str, object]:
+        status = str(value.get("status", "")).strip().lower()
+        if status in {"needed_changes", "need_changes", "needs change", "needed changes"}:
+            value["status"] = "needs_changes"
+        return value
+
+    def log_action_loop_event(
+        self,
+        event: str,
+        data: Dict[str, object],
+        run_id: str | None = None,
+    ) -> None:
+        self.append_run_log(
+            "agent_action",
+            event,
+            data,
+            level="full",
+            run_id=run_id,
+        )
+
+    def build_structured_finalizer_prompt(
+        self,
+        task: str,
+        history: List[Dict[str, object]],
+    ) -> str:
+        history_text = json.dumps(
+            history[-self.current_task_history_items:],
+            indent=2,
+            ensure_ascii=False,
+        )
+
+        return f"""
+You are finalizing a workflow step after its tool/action iteration budget was reached.
+
+Workflow step prompt:
+{task}
+
+Tool/action history:
+{history_text}
+
+Return exactly one JSON object with this schema and no markdown:
+{{
+  "status": "passed|failed|needs_changes|blocked",
+  "summary": "short workflow step result summary based on the evidence",
+  "findings": ["specific issue, verification result, or remaining problem"],
+  "artifacts": ["created, modified, inspected, or verified files"]
+}}
+
+Rules:
+- If the task appears complete from the tool history, use status "passed".
+- For visual, UI, HTML, canvas, animation, game, page, layout, or screenshot-related checks, browser title/text/load success alone is not visual verification; require screenshot or explicit visual evidence before passing.
+- If changes were made but verification is missing or uncertain, use status "needs_changes".
+- If a command/tool error prevents progress, use status "failed" or "blocked".
+- Do not claim files were changed or verified unless the history supports it.
+""".strip()
+
+    def run_structured_finalizer(
+        self,
+        task: str,
+        history: List[Dict[str, object]],
+        iteration_count: int,
+        selected_model: str | None,
+        progress_callback: ProgressCallback,
+        task_images: List[str],
+        run_log_id: str | None,
+        reason: str,
+    ) -> str | None:
+        finalizer_prompt = self.build_structured_finalizer_prompt(task, history)
+        self.log_action_loop_event(
+            "structured_finalizer_started",
+            {
+                "iterations": iteration_count,
+                "reason": reason,
+                "prompt": finalizer_prompt,
+            },
+            run_log_id,
+        )
+        finalizer_response = self.query_ollama(
+            finalizer_prompt,
+            timeout=self.model_timeout_seconds,
+            progress_callback=progress_callback,
+            json_mode=True,
+            image_paths=task_images,
+            model=selected_model,
+        )
+        self.log_action_loop_event(
+            "structured_finalizer_finished",
+            {
+                "iterations": iteration_count,
+                "reason": reason,
+                "raw_response": finalizer_response,
+            },
+            run_log_id,
+        )
+        try:
+            finalizer_obj = self.extract_json_object(finalizer_response)
+            if self.is_structured_workflow_result(finalizer_obj):
+                finalizer_obj = self.normalize_structured_workflow_result(finalizer_obj)
+                if progress_callback:
+                    progress_callback({
+                        "kind": "status",
+                        "text": f"Finalized structured workflow result after {iteration_count} iterations.",
+                    })
+                return json.dumps(finalizer_obj, ensure_ascii=False)
+        except Exception:
+            return None
+
+        return None
+
     def build_plain_response_prompt(
         self,
         task: str,
         conversation_context: List[Dict[str, object]] | None = None,
         current_task_history: List[Dict[str, object]] | None = None,
         routing_decision: RoutingDecision | None = None,
+        require_structured_result: bool = False,
     ) -> str:
         memory_summary = self.load_memory_summary()
 
@@ -1105,6 +1414,16 @@ Rules:
             ensure_ascii=False,
         )
 
+        response_rules = (
+            "- Return only the structured JSON object requested by the current user message.\n"
+            "- Do not wrap it in markdown.\n"
+            "- Use the current task tool/action history when it contains relevant evidence."
+            if require_structured_result
+            else "- Answer directly in plain text.\n"
+            "- Do not output JSON.\n"
+            "- Use the current task tool/action history when it contains relevant results."
+        )
+
         return f"""
 You are responding directly to the user.
 
@@ -1124,9 +1443,7 @@ Current user message:
 {task}
 
 Instructions:
-- Answer directly in plain text.
-- Do not output JSON.
-- Use the current task tool/action history when it contains relevant results.
+{response_rules}
 - If a tool result says files were found, report those files. Do not claim you cannot access files.
 - Use recent conversation context to resolve references like "it", "that", "continue", "make it rhyme", "rewrite it", etc.
 - If the user asks to transform the previous answer, transform the previous agent answer.
@@ -1140,6 +1457,7 @@ Instructions:
         conversation_context: List[Dict[str, object]] | None = None,
         task_images: List[str] | None = None,
         routing_decision: RoutingDecision | None = None,
+        require_structured_result: bool = False,
     ) -> str:
         history_text = json.dumps(
             history[-self.current_task_history_items:],
@@ -1162,6 +1480,16 @@ Instructions:
             ensure_ascii=False,
         )
 
+        structured_rules = ""
+        if require_structured_result:
+            structured_rules = """
+- This is a workflow step. Tools are available, but tool output is evidence, not the final answer.
+- Always respond with an action object. Do not return the workflow result object directly.
+- Do not finish by simply returning file contents, command output, or browser text.
+- To complete this workflow step, use action "finish".
+- The finish.message value must be the workflow result object requested in the current workflow step prompt.
+""".rstrip()
+
         return f"""
 You are a local coding agent running inside a restricted Docker work directory.
 
@@ -1180,7 +1508,7 @@ Working directory:
 Previous steps and observations for this current task:
 {history_text}
 
-Uploaded images available to the model:
+Images available to the model, including user uploads and screenshots produced during this task:
 {json.dumps(task_images or [], indent=2, ensure_ascii=False)}
 
 Routing decision:
@@ -1200,7 +1528,10 @@ Rules:
 - Give a useful short summary on every iteration.
 - If modifying an existing file, read it first unless its content is already in the task history.
 - For HTML tasks, write a complete standalone HTML file.
+- For HTML, canvas, animation, game, or visual UI checks, browser DOM text/title alone is not enough. Use screenshots or explicit visual evidence when visual output matters.
+- Do not mark a visual check passed without screenshot or explicit visual evidence.
 - This local-only v1 has no bitmap image-generation tool. If the routing decision says task_type is image_generation, create code-native visual output only when the user asked for a file/page; otherwise explain that local image generation is not configured.
+{structured_rules}
 - Finish only when the task is actually complete.
 - The user should always receive a useful message, not only "Task completed."
 """.strip()
@@ -1225,11 +1556,23 @@ Rules:
         task_images: List[str] | None = None,
         selected_model: str | None = None,
         routing_decision: RoutingDecision | None = None,
+        require_structured_result: bool = False,
+        max_iterations: int | None = None,
+        run_log_id: str | None = None,
     ) -> str:
         history: List[Dict[str, object]] = []
         successful_action_counts: Dict[str, int] = {}
-        task_images = task_images or []
+        task_images = list(task_images or [])
+        evidence_images: List[str] = []
+        iteration_limit = max_iterations if max_iterations and max_iterations > 0 else self.max_iterations
         self._output_images = []
+
+        def model_images() -> List[str]:
+            images: List[str] = []
+            for image in [*task_images, *evidence_images]:
+                if image and image not in images:
+                    images.append(image)
+            return images
 
         def emit(event: ProgressEvent) -> None:
             if progress_callback:
@@ -1242,13 +1585,25 @@ Rules:
             "text": f"Task started: {task}",
         })
 
-        for iteration in range(1, self.max_iterations + 1):
+        self.log_action_loop_event(
+            "task_started",
+            {
+                "task_preview": task[:500],
+                "selected_model": selected_model,
+                "require_structured_result": require_structured_result,
+                "max_iterations": iteration_limit,
+            },
+            run_log_id,
+        )
+
+        for iteration in range(1, iteration_limit + 1):
             prompt = self.build_agent_prompt(
                 task,
                 history,
                 conversation_context=conversation_context,
-                task_images=task_images,
+                task_images=model_images(),
                 routing_decision=routing_decision,
+                require_structured_result=require_structured_result,
             )
 
             emit({
@@ -1262,7 +1617,7 @@ Rules:
                 timeout=self.model_timeout_seconds,
                 progress_callback=progress_callback,
                 json_mode=True,
-                image_paths=task_images,
+                image_paths=model_images(),
                 model=selected_model,
             )
 
@@ -1271,6 +1626,16 @@ Rules:
                 "iteration": iteration,
                 "text": raw_response,
             })
+            self.log_action_loop_event(
+                "model_output",
+                {
+                    "iteration": iteration,
+                    "selected_model": selected_model,
+                    "image_paths": model_images(),
+                    "raw_response": raw_response,
+                },
+                run_log_id,
+            )
 
             if raw_response.startswith("Error"):
                 emit({
@@ -1278,6 +1643,14 @@ Rules:
                     "iteration": iteration,
                     "text": raw_response,
                 })
+                self.log_action_loop_event(
+                    "model_error",
+                    {
+                        "iteration": iteration,
+                        "error": raw_response,
+                    },
+                    run_log_id,
+                )
                 return raw_response
 
             try:
@@ -1302,7 +1675,33 @@ Rules:
                     "summary": "Invalid JSON",
                     "text": json.dumps(observation, indent=2),
                 })
+                self.log_action_loop_event(
+                    "invalid_json",
+                    {
+                        "iteration": iteration,
+                        "raw_response": raw_response,
+                        "observation": observation,
+                    },
+                    run_log_id,
+                )
                 continue
+
+            if require_structured_result and self.is_structured_workflow_result(action_obj):
+                action_obj = self.normalize_structured_workflow_result(action_obj)
+                emit({
+                    "kind": "status",
+                    "iteration": iteration,
+                    "text": "Accepted direct structured workflow result.",
+                })
+                self.log_action_loop_event(
+                    "direct_structured_result",
+                    {
+                        "iteration": iteration,
+                        "result": action_obj,
+                    },
+                    run_log_id,
+                )
+                return json.dumps(action_obj, ensure_ascii=False)
 
             summary = str(action_obj.get("summary", f"Iteration {iteration}"))
             action = str(action_obj.get("action", ""))
@@ -1314,8 +1713,25 @@ Rules:
                 "action": action,
                 "text": summary,
             })
+            self.log_action_loop_event(
+                "action_selected",
+                {
+                    "iteration": iteration,
+                    "summary": summary,
+                    "action": action,
+                    "action_input": {
+                        k: v for k, v in action_obj.items()
+                        if k not in {"content"}
+                    },
+                },
+                run_log_id,
+            )
 
             observation = self.execute_action(action_obj)
+            if action == "browser_screenshot" and observation.get("success"):
+                screenshot_filename = str(observation.get("filename", "")).strip()
+                if screenshot_filename and screenshot_filename not in evidence_images:
+                    evidence_images.append(screenshot_filename)
 
             emit({
                 "kind": "observation",
@@ -1323,6 +1739,15 @@ Rules:
                 "action": action,
                 "text": json.dumps(observation, indent=2),
             })
+            self.log_action_loop_event(
+                "tool_observation",
+                {
+                    "iteration": iteration,
+                    "action": action,
+                    "observation": observation,
+                },
+                run_log_id,
+            )
 
             if action == "respond":
                 emit({
@@ -1336,6 +1761,7 @@ Rules:
                     conversation_context=conversation_context,
                     current_task_history=history,
                     routing_decision=routing_decision,
+                    require_structured_result=require_structured_result,
                 )
 
                 message = self.query_ollama(
@@ -1343,7 +1769,7 @@ Rules:
                     timeout=self.model_timeout_seconds,
                     progress_callback=progress_callback,
                     json_mode=False,
-                    image_paths=task_images,
+                    image_paths=model_images(),
                     model=selected_model,
                 )
 
@@ -1357,10 +1783,25 @@ Rules:
                     },
                 })
 
+                self.log_action_loop_event(
+                    "respond_finished",
+                    {
+                        "iteration": iteration,
+                        "message": message,
+                    },
+                    run_log_id,
+                )
                 return message
 
             if action == "finish":
-                message = str(observation.get("message") or action_obj.get("message") or summary)
+                message_value = observation.get("message")
+                if message_value is None or message_value == "":
+                    message_value = action_obj.get("message", summary)
+                message = (
+                    json.dumps(message_value, ensure_ascii=False)
+                    if isinstance(message_value, (dict, list))
+                    else str(message_value)
+                )
 
                 history.append({
                     "iteration": iteration,
@@ -1369,13 +1810,22 @@ Rules:
                     "observation": observation,
                 })
 
+                self.log_action_loop_event(
+                    "finish_action",
+                    {
+                        "iteration": iteration,
+                        "message": message,
+                    },
+                    run_log_id,
+                )
                 return message
 
             compact_observation = dict(observation)
             if "content" in compact_observation and isinstance(compact_observation["content"], str):
                 content = compact_observation["content"]
-                compact_observation["content"] = content[:3000]
-                compact_observation["content_truncated_for_history"] = len(content) > 3000
+                compacted_content, content_truncated = self.compact_content_for_history(content)
+                compact_observation["content"] = compacted_content
+                compact_observation["content_truncated_for_history"] = content_truncated
 
             if not observation.get("success"):
                 compact_observation["policy_hint"] = (
@@ -1411,19 +1861,70 @@ Rules:
                 successful_action_counts[action_signature] = (
                     successful_action_counts.get(action_signature, 0) + 1
                 )
+                if (
+                    require_structured_result
+                    and successful_action_counts[action_signature] >= 2
+                ):
+                    self.log_action_loop_event(
+                        "repeat_action_finalizer_triggered",
+                        {
+                            "iteration": iteration,
+                            "action": action,
+                            "repeat_count": successful_action_counts[action_signature],
+                        },
+                        run_log_id,
+                    )
+                    finalized = self.run_structured_finalizer(
+                        task,
+                        history,
+                        iteration,
+                        selected_model,
+                        progress_callback,
+                        model_images(),
+                        run_log_id,
+                        reason=f"repeated successful action: {action}",
+                    )
+                    if finalized is not None:
+                        return finalized
 
                 if (
                     tool
                     and tool.direct_return_on_repeat
                     and successful_action_counts[action_signature] >= 2
+                    and not require_structured_result
                 ):
-                    return self.format_observation_for_user(action, observation)
+                    message = self.format_observation_for_user(action, observation)
+                    self.log_action_loop_event(
+                        "direct_return_on_repeat",
+                        {
+                            "iteration": iteration,
+                            "action": action,
+                            "message": message,
+                        },
+                        run_log_id,
+                    )
+                    return message
 
-            if tool and tool.direct_return_phrases and observation.get("success"):
+            if (
+                tool
+                and tool.direct_return_phrases
+                and observation.get("success")
+                and not require_structured_result
+            ):
                 task_lower = task.lower()
 
                 if any(phrase in task_lower for phrase in tool.direct_return_phrases):
-                    return self.format_observation_for_user(action, observation)
+                    message = self.format_observation_for_user(action, observation)
+                    self.log_action_loop_event(
+                        "direct_return_phrase",
+                        {
+                            "iteration": iteration,
+                            "action": action,
+                            "message": message,
+                        },
+                        run_log_id,
+                    )
+                    return message
 
             if tool and tool.continue_after_success and observation.get("success"):
                 emit({
@@ -1433,11 +1934,33 @@ Rules:
                 })
                 continue
 
-        final = f"Stopped after {self.max_iterations} iterations. The task may be incomplete."
+        if require_structured_result:
+            finalized = self.run_structured_finalizer(
+                task,
+                history,
+                iteration_limit,
+                selected_model,
+                progress_callback,
+                model_images(),
+                run_log_id,
+                reason="iteration limit reached",
+            )
+            if finalized is not None:
+                return finalized
+
+        final = f"Stopped after {iteration_limit} iterations. The task may be incomplete."
         emit({
             "kind": "status",
             "text": final,
         })
+        self.log_action_loop_event(
+            "iteration_limit_reached",
+            {
+                "iterations": iteration_limit,
+                "message": final,
+            },
+            run_log_id,
+        )
         return final
 
     # -------------------------

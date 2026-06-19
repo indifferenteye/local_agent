@@ -76,8 +76,22 @@ def update_routing_settings(data: Dict[str, Any]) -> None:
     if "quality_mode" in routing:
         agent.set_routing_quality_mode(routing.get("quality_mode"))
 
-    if "debug_logging" in routing:
-        agent.set_routing_debug_enabled(routing.get("debug_logging"))
+    if "run_log_level" in routing:
+        agent.set_run_log_level(routing.get("run_log_level"))
+    elif "workflow_log_level" in routing:
+        agent.set_run_log_level(routing.get("workflow_log_level"))
+    elif "debug_logging" in routing and routing.get("debug_logging"):
+        agent.set_run_log_level("full")
+
+    if "run_log_file" in routing:
+        run_log_file = str(routing.get("run_log_file") or "").strip()
+        if run_log_file:
+            agent.run_log_file = run_log_file
+
+    if "run_log_detail_dir" in routing:
+        detail_dir = str(routing.get("run_log_detail_dir") or "").strip()
+        if detail_dir:
+            agent.run_log_detail_dir = detail_dir
 
     roles = routing.get("roles")
     if isinstance(roles, dict):

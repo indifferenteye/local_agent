@@ -71,7 +71,7 @@ def load_settings() -> None:
                     "Loaded routing settings: "
                     f"enabled={state.agent.routing_enabled}, "
                     f"quality={state.agent.routing_quality_mode}, "
-                    f"debug={state.agent.routing_debug_enabled}"
+                    f"run_log={state.agent.run_log_level}"
                 )
 
     except Exception as exc:
@@ -96,7 +96,9 @@ def save_settings() -> None:
                     "routing": {
                         "enabled": state.agent.routing_enabled,
                         "quality_mode": state.agent.routing_quality_mode,
-                        "debug_logging": state.agent.routing_debug_enabled,
+                        "run_log_level": state.agent.run_log_level,
+                        "run_log_file": state.agent.run_log_file,
+                        "run_log_detail_dir": state.agent.run_log_detail_dir,
                         "roles": state.agent.routing_roles,
                     },
                 },

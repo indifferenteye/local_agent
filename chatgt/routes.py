@@ -13,6 +13,11 @@ from commands import handle_slash_command
 from events import broadcast, broadcast_message, normalize_progress_event
 from memory import maybe_summarize_memory, prepare_context_for_next_task
 from persistence import load_memory_state, save_memory_state, save_messages, save_settings
+from agent_workflows import (
+    WorkflowRunner,
+    get_workflow,
+    workflow_options,
+)
 
 
 def register_routes(app) -> None:
@@ -20,6 +25,7 @@ def register_routes(app) -> None:
         task: str,
         task_images: list[str] | None = None,
         display_task: str | None = None,
+        workflow_id: str | None = None,
     ):
         broadcast(
             "user",
@@ -47,36 +53,54 @@ def register_routes(app) -> None:
                         ),
                     }))
 
-                    routing_decision = state.agent.route_current_task(
-                        task,
-                        conversation_context=conversation_context,
-                        task_images=task_images or [],
-                    )
-                    state.agent.log_routing_decision(task, routing_decision)
-                    classification = routing_decision.classification
-                    classification_type = (
-                        classification.task_type if classification else "unknown"
-                    )
-                    fallback = " via default fallback" if routing_decision.fallback_used else ""
+                    if workflow_id:
+                        workflow = get_workflow(workflow_id)
+                        if workflow is None:
+                            final = f"Unknown workflow: {workflow_id}"
+                        else:
+                            broadcast_message(normalize_progress_event({
+                                "kind": "status",
+                                "text": f"Workflow selected: {workflow.name}",
+                            }))
+                            runner = WorkflowRunner(state.agent)
+                            final = runner.run(
+                                workflow,
+                                task,
+                                progress_callback=progress,
+                                conversation_context=conversation_context,
+                                task_images=task_images or [],
+                            )
+                    else:
+                        routing_decision = state.agent.route_current_task(
+                            task,
+                            conversation_context=conversation_context,
+                            task_images=task_images or [],
+                        )
+                        state.agent.log_routing_decision(task, routing_decision)
+                        classification = routing_decision.classification
+                        classification_type = (
+                            classification.task_type if classification else "unknown"
+                        )
+                        fallback = " via default fallback" if routing_decision.fallback_used else ""
 
-                    broadcast_message(normalize_progress_event({
-                        "kind": "status",
-                        "text": (
-                            "Routing: "
-                            f"{classification_type} -> {routing_decision.selected_role} "
-                            f"({routing_decision.selected_model}){fallback}. "
-                            f"{routing_decision.reason}"
-                        ),
-                    }))
+                        broadcast_message(normalize_progress_event({
+                            "kind": "status",
+                            "text": (
+                                "Routing: "
+                                f"{classification_type} -> {routing_decision.selected_role} "
+                                f"({routing_decision.selected_model}){fallback}. "
+                                f"{routing_decision.reason}"
+                            ),
+                        }))
 
-                    final = state.agent.run_agentic_task(
-                        task,
-                        progress_callback=progress,
-                        conversation_context=conversation_context,
-                        task_images=task_images or [],
-                        selected_model=routing_decision.selected_model,
-                        routing_decision=routing_decision,
-                    )
+                        final = state.agent.run_agentic_task(
+                            task,
+                            progress_callback=progress,
+                            conversation_context=conversation_context,
+                            task_images=task_images or [],
+                            selected_model=routing_decision.selected_model,
+                            routing_decision=routing_decision,
+                        )
                     broadcast("agent", final, images=state.agent.consume_output_images())
 
                     maybe_summarize_memory()
@@ -118,6 +142,12 @@ def register_routes(app) -> None:
             "think_mode": state.agent.get_think_mode_label(),
             "workdir": state.agent.working_dir,
             "context": context_payload(),
+        })
+
+    @app.route("/workflows")
+    def get_workflows():
+        return jsonify({
+            "workflows": workflow_options(),
         })
 
     @app.route("/model", methods=["POST"])
@@ -166,8 +196,9 @@ def register_routes(app) -> None:
             "routing": {
                 "enabled": state.agent.routing_enabled,
                 "quality_mode": state.agent.routing_quality_mode,
-                "debug_logging": state.agent.routing_debug_enabled,
-                "debug_log_file": state.agent.routing_debug_file,
+                "run_log_level": state.agent.run_log_level,
+                "run_log_file": state.agent.run_log_file,
+                "run_log_detail_dir": state.agent.run_log_detail_dir,
                 "roles": state.agent.routing_roles,
             },
         }
@@ -240,6 +271,7 @@ def register_routes(app) -> None:
             return jsonify({"error": str(exc)}), 400
 
         if task:
+            workflow_id = request.form.get("workflow", "").strip() or None
             image_paths = [image["filename"] for image in images]
             image_context = ""
             if image_paths:
@@ -247,7 +279,12 @@ def register_routes(app) -> None:
                     f"- {path}" for path in image_paths
                 )
 
-            start_agent_task(task + image_context, image_paths, display_task=task)
+            start_agent_task(
+                task + image_context,
+                image_paths,
+                display_task=task,
+                workflow_id=workflow_id,
+            )
             return jsonify({"started": True, "images": images})
 
         broadcast("user", "Uploaded image.", images=images)
@@ -257,6 +294,7 @@ def register_routes(app) -> None:
     def run_task():
         data = request.get_json(force=True)
         task = data.get("task", "").strip()
+        workflow_id = str(data.get("workflow", "") or "").strip() or None
 
         if not task:
             return jsonify({"error": "Missing task"}), 400
@@ -269,7 +307,7 @@ def register_routes(app) -> None:
         if state.running:
             return jsonify({"error": "Task already running"}), 409
 
-        start_agent_task(task)
+        start_agent_task(task, workflow_id=workflow_id)
 
         return jsonify({"started": True})
 
@@ -277,6 +315,7 @@ def register_routes(app) -> None:
     def clear_messages():
         state.messages.clear()
         save_messages()
+        state.agent.clear_run_logs()
 
         save_memory_state({
             "summarized_until_index": 0,

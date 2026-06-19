@@ -44,6 +44,10 @@ TODO:
 - skills
 - better system promt, better tools
 - multiple model workflow? (agentic, coding, images etc)
+- abort button
+- ui and better ux for workflows
+- stop scrolling down when status updats come in
+- stop adding "Model is still generating... 50s" every 5 seconds, instead only update the seconds-number
 - ... 
 
 Context notes:

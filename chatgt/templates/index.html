@@ -333,7 +333,7 @@
 
         form {
             display: grid;
-            grid-template-columns: auto 1fr auto;
+            grid-template-columns: auto minmax(150px, 220px) 1fr auto;
             grid-template-rows: auto auto;
             gap: 8px;
             padding: 12px;
@@ -344,7 +344,7 @@
 
         textarea {
             flex: 1;
-            grid-column: 2;
+            grid-column: 3;
             resize: none;
             min-height: 46px;
             max-height: 140px;
@@ -370,7 +370,7 @@
         }
 
         #send {
-            grid-column: 3;
+            grid-column: 4;
             grid-row: 1;
         }
 
@@ -408,6 +408,19 @@
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
+        }
+
+        .workflow-select {
+            grid-column: 2;
+            grid-row: 1;
+            border: 1px solid #314153;
+            border-radius: 12px;
+            padding: 0 10px;
+            font: inherit;
+            font-size: 13px;
+            background: #101820;
+            color: #d7e2ee;
+            min-width: 0;
         }
 
         .message-images {
@@ -462,6 +475,31 @@
             form {
                 padding: 10px;
                 grid-template-columns: auto 1fr auto;
+                grid-template-rows: auto auto auto;
+            }
+
+            .workflow-select {
+                grid-column: 1 / -1;
+                grid-row: 1;
+                min-height: 40px;
+            }
+
+            .file-control {
+                grid-row: 2;
+            }
+
+            textarea {
+                grid-column: 2;
+                grid-row: 2;
+            }
+
+            #send {
+                grid-column: 3;
+                grid-row: 2;
+            }
+
+            .selected-files {
+                grid-row: 3;
             }
 
             button {
@@ -567,8 +605,12 @@
                         <option value="high_quality">High quality</option>
                     </select>
 
-                    <label for="routingDebugLogging">Routing debug log</label>
-                    <input id="routingDebugLogging" type="checkbox" />
+                    <label for="runLogLevel">Run logs</label>
+                    <select id="runLogLevel">
+                        <option value="off">Off</option>
+                        <option value="minimal">Minimal input/output</option>
+                        <option value="full">Full internal trace</option>
+                    </select>
 
                     <label for="routerModel">Router model</label>
                     <select id="routerModel"></select>
@@ -585,7 +627,8 @@
 
                 <p class="settings-note">
                     Empty routing roles fall back to the selected default model.
-                    Debug logging writes technical routing details to <code id="routingDebugFile">.agent_routing_debug.jsonl</code>.
+                    Run logs write a compact index to <code id="runLogFile">.agent_runs.jsonl</code>;
+                    full trace details are stored under <code id="runLogDetailDir">.agent_run_details</code>.
                 </p>
 
                 <div class="settings-actions">
@@ -606,6 +649,9 @@
             +
             <input id="images" type="file" accept="image/*" multiple />
         </label>
+        <select class="workflow-select" id="workflowSelect" title="Workflow">
+            <option value="">Normal agent</option>
+        </select>
         <textarea id="task" placeholder="Type a task..." autofocus></textarea>
         <button id="send" type="submit">Send</button>
         <div class="selected-files" id="selectedFiles"></div>
@@ -616,6 +662,7 @@
         const form = document.getElementById("form");
         const taskInput = document.getElementById("task");
         const imageInput = document.getElementById("images");
+        const workflowSelect = document.getElementById("workflowSelect");
         const sendButton = document.getElementById("send");
         const selectedFiles = document.getElementById("selectedFiles");
         const clearButton = document.getElementById("clear");
@@ -633,8 +680,9 @@
         const contextStatus = document.getElementById("contextStatus");
         const routingEnabledInput = document.getElementById("routingEnabled");
         const routingQualitySelect = document.getElementById("routingQuality");
-        const routingDebugLoggingInput = document.getElementById("routingDebugLogging");
-        const routingDebugFile = document.getElementById("routingDebugFile");
+        const runLogLevelSelect = document.getElementById("runLogLevel");
+        const runLogFile = document.getElementById("runLogFile");
+        const runLogDetailDir = document.getElementById("runLogDetailDir");
         const routerModelSelect = document.getElementById("routerModel");
         const plannerModelSelect = document.getElementById("plannerModel");
         const codingModelSelect = document.getElementById("codingModel");
@@ -926,8 +974,9 @@
             ollamaNumCtxInput.value = context.ollama_num_ctx || "";
             routingEnabledInput.checked = routing.enabled !== false;
             routingQualitySelect.value = routing.quality_mode || "balanced";
-            routingDebugLoggingInput.checked = routing.debug_logging === true;
-            routingDebugFile.textContent = routing.debug_log_file || ".agent_routing_debug.jsonl";
+            runLogLevelSelect.value = routing.run_log_level || "off";
+            runLogFile.textContent = routing.run_log_file || ".agent_runs.jsonl";
+            runLogDetailDir.textContent = routing.run_log_detail_dir || ".agent_run_details";
             populateRoutingRoleSelects(roles);
 
             contextStatus.textContent =
@@ -982,6 +1031,30 @@
             }
         }
 
+        async function loadWorkflows() {
+            try {
+                const res = await fetch("/workflows", { cache: "no-store" });
+                const data = await res.json();
+
+                workflowSelect.innerHTML = "";
+
+                const normalOption = document.createElement("option");
+                normalOption.value = "";
+                normalOption.textContent = "Normal agent";
+                workflowSelect.appendChild(normalOption);
+
+                for (const workflow of data.workflows || []) {
+                    const option = document.createElement("option");
+                    option.value = workflow.id;
+                    option.textContent = workflow.name;
+                    option.title = workflow.description || "";
+                    workflowSelect.appendChild(option);
+                }
+            } catch (err) {
+                console.error("Could not load workflows:", err);
+            }
+        }
+
         async function loadMessages() {
             try {
                 const res = await fetch("/messages", { cache: "no-store" });
@@ -991,6 +1064,7 @@
 
                 sendButton.disabled = data.running === true;
                 imageInput.disabled = data.running === true;
+                workflowSelect.disabled = data.running === true;
                 modelSelect.disabled = data.running === true;
                 contextSettingsButton.disabled = data.running === true;
                 routerModelSelect.disabled = data.running === true;
@@ -999,7 +1073,7 @@
                 visionModelSelect.disabled = data.running === true;
                 routingEnabledInput.disabled = data.running === true;
                 routingQualitySelect.disabled = data.running === true;
-                routingDebugLoggingInput.disabled = data.running === true;
+                runLogLevelSelect.disabled = data.running === true;
 
                 setMeta(data);
             } catch (err) {
@@ -1050,6 +1124,7 @@
                 if (files.length > 0) {
                     const formData = new FormData();
                     formData.append("task", text);
+                    formData.append("workflow", workflowSelect.value);
 
                     for (const file of files) {
                         formData.append("images", file);
@@ -1065,7 +1140,7 @@
                         headers: {
                             "Content-Type": "application/json"
                         },
-                        body: JSON.stringify({ task: text })
+                        body: JSON.stringify({ task: text, workflow: workflowSelect.value })
                     });
                 }
 
@@ -1145,7 +1220,7 @@
                     routing: {
                         enabled: routingEnabledInput.checked,
                         quality_mode: routingQualitySelect.value,
-                        debug_logging: routingDebugLoggingInput.checked,
+                        run_log_level: runLogLevelSelect.value,
                         roles: {
                             router: routerModelSelect.value,
                             planner: plannerModelSelect.value,
@@ -1198,7 +1273,7 @@
         });
 
         clearButton.addEventListener("click", async () => {
-            if (!confirm("Clear the visible saved chat history? This will not clear the long-term memory summary.")) return;
+            if (!confirm("Clear the visible saved chat history and run logs? This will not clear the long-term memory summary.")) return;
 
             try {
                 await fetch("/clear", { method: "POST" });
@@ -1222,6 +1297,7 @@
         });
 
         loadModels();
+        loadWorkflows();
         loadMessages();
     </script>
 </body>

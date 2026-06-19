@@ -227,11 +227,14 @@ def build_default_tools(agent) -> Dict[str, AgentTool]:
         ),
         AgentTool(
             name="browser_open",
-            description="Open JavaScript-rendered, visual, or interactive pages in Chromium.",
+            description=(
+                "Open JavaScript-rendered, visual, or interactive pages in Chromium. "
+                "Use http/https URLs or workspace-relative local files such as `world/index.html`."
+            ),
             example={
                 "summary": "Short progress update for the user.",
                 "action": "browser_open",
-                "url": "https://example.com/",
+                "url": "world/index.html",
             },
             handler=lambda action: agent.browser_open(str(action.get("url", ""))),
             formatter=format_browser_snapshot,
@@ -335,7 +338,7 @@ def build_default_tools(agent) -> Dict[str, AgentTool]:
             handler=lambda action: {
                 "success": True,
                 "finished": True,
-                "message": str(action.get("message", action.get("summary", ""))),
+                "message": action.get("message", action.get("summary", "")),
             },
         ),
     ]
