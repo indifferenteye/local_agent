@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -11,6 +12,8 @@ from typing import Any, Callable, Dict, List
 
 WorkflowProgress = Callable[[Dict[str, object]], None] | None
 WORKFLOW_CONTEXT_TEXT_LIMIT = 500
+WORKFLOW_FILE = ".agent_workflows.json"
+WORKFLOW_ROLES = {"default", "router", "planner", "coding", "vision"}
 
 
 @dataclass
@@ -218,40 +221,289 @@ def workflow_catalog() -> List[WorkflowDefinition]:
     ]
 
 
-def workflow_options() -> List[Dict[str, str]]:
-    return [
+def workflow_options() -> List[Dict[str, object]]:
+    return workflow_options_for_workdir(None)
+
+
+def workflow_options_for_workdir(workdir: str | None = None) -> List[Dict[str, object]]:
+    options: List[Dict[str, object]] = [
         {
             "id": workflow.id,
             "name": workflow.name,
             "description": workflow.description,
+            "editable": False,
+            "source": "built-in",
         }
         for workflow in workflow_catalog()
     ]
 
+    if workdir:
+        options.extend(
+            {
+                "id": workflow.id,
+                "name": workflow.name,
+                "description": workflow.description,
+                "editable": True,
+                "source": "custom",
+            }
+            for workflow in load_custom_workflows(workdir)
+        )
 
-def get_workflow(workflow_id: str) -> WorkflowDefinition | None:
+    return options
+
+
+def built_in_workflow_ids() -> set[str]:
+    return {workflow.id for workflow in workflow_catalog()}
+
+
+def workflow_item_to_dict(item: WorkflowStep | WorkflowLoop) -> Dict[str, object]:
+    if isinstance(item, WorkflowLoop):
+        return {
+            "kind": "loop",
+            "id": item.id,
+            "until": item.until,
+            "max_iterations": item.max_iterations,
+            "steps": [workflow_item_to_dict(step) for step in item.steps],
+        }
+
+    return {
+        "kind": "step",
+        "id": item.id,
+        "type": item.type,
+        "role": item.role,
+        "prompt": item.prompt,
+        "condition": item.condition,
+        "tool_guidance": item.tool_guidance,
+        "max_iterations": item.max_iterations,
+    }
+
+
+def workflow_to_dict(workflow: WorkflowDefinition) -> Dict[str, object]:
+    return {
+        "id": workflow.id,
+        "name": workflow.name,
+        "description": workflow.description,
+        "steps": [workflow_item_to_dict(item) for item in workflow.steps],
+    }
+
+
+def workflow_item_from_dict(data: Dict[str, object]) -> WorkflowStep | WorkflowLoop:
+    kind = str(data.get("kind", "") or "").strip().lower()
+    if kind == "loop" or "until" in data:
+        steps_data = data.get("steps", [])
+        if not isinstance(steps_data, list):
+            raise ValueError(f"Loop {data.get('id', '')} steps must be a list")
+        return WorkflowLoop(
+            id=str(data.get("id", "") or "").strip(),
+            until=str(data.get("until", "") or "").strip(),
+            max_iterations=int(data.get("max_iterations", 2) or 2),
+            steps=[
+                workflow_item_from_dict(step)
+                for step in steps_data
+                if isinstance(step, dict)
+            ],
+        )
+
+    return WorkflowStep(
+        id=str(data.get("id", "") or "").strip(),
+        type=str(data.get("type", "agentic_task") or "agentic_task").strip(),
+        role=str(data.get("role", "default") or "default").strip(),
+        prompt=str(data.get("prompt", "") or ""),
+        condition=str(data.get("condition", "") or "").strip(),
+        tool_guidance=str(data.get("tool_guidance", "") or ""),
+        max_iterations=int(data.get("max_iterations", 8) or 8),
+    )
+
+
+def workflow_from_dict(data: Dict[str, object]) -> WorkflowDefinition:
+    steps_data = data.get("steps", [])
+    if not isinstance(steps_data, list):
+        raise ValueError("Workflow steps must be a list")
+    return WorkflowDefinition(
+        id=str(data.get("id", "") or "").strip(),
+        name=str(data.get("name", "") or "").strip(),
+        description=str(data.get("description", "") or ""),
+        steps=[
+            workflow_item_from_dict(item)
+            for item in steps_data
+            if isinstance(item, dict)
+        ],
+    )
+
+
+def custom_workflow_path(workdir: str) -> str:
+    return os.path.join(workdir, WORKFLOW_FILE)
+
+
+def load_custom_workflows(workdir: str) -> List[WorkflowDefinition]:
+    path = custom_workflow_path(workdir)
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return []
+
+    items = data.get("workflows", data) if isinstance(data, dict) else data
+    if not isinstance(items, list):
+        return []
+
+    workflows: List[WorkflowDefinition] = []
+    seen: set[str] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        try:
+            workflow = workflow_from_dict(item)
+            validate_workflow(workflow, reserved_ids=built_in_workflow_ids())
+        except ValueError:
+            continue
+        if workflow.id in seen:
+            continue
+        seen.add(workflow.id)
+        workflows.append(workflow)
+
+    return workflows
+
+
+def save_custom_workflows(workdir: str, workflows: List[WorkflowDefinition]) -> None:
+    os.makedirs(workdir, exist_ok=True)
+    with open(custom_workflow_path(workdir), "w", encoding="utf-8") as f:
+        json.dump(
+            {"workflows": [workflow_to_dict(workflow) for workflow in workflows]},
+            f,
+            indent=2,
+        )
+        f.write("\n")
+
+
+def save_custom_workflow(workdir: str, workflow: WorkflowDefinition, replacing_id: str | None = None) -> WorkflowDefinition:
+    validate_workflow(workflow, reserved_ids=built_in_workflow_ids())
+    workflows = load_custom_workflows(workdir)
+    target_id = replacing_id or workflow.id
+
+    if replacing_id and replacing_id in built_in_workflow_ids():
+        raise ValueError(f"Cannot update built-in workflow: {replacing_id}")
+    if any(existing.id == workflow.id and existing.id != target_id for existing in workflows):
+        raise ValueError(f"Custom workflow already exists: {workflow.id}")
+
+    replaced = False
+    for index, existing in enumerate(workflows):
+        if existing.id == target_id:
+            workflows[index] = workflow
+            replaced = True
+            break
+
+    if not replaced:
+        workflows.append(workflow)
+
+    save_custom_workflows(workdir, workflows)
+    return workflow
+
+
+def delete_custom_workflow(workdir: str, workflow_id: str) -> bool:
+    workflows = load_custom_workflows(workdir)
+    kept = [workflow for workflow in workflows if workflow.id != workflow_id]
+    if len(kept) == len(workflows):
+        return False
+    save_custom_workflows(workdir, kept)
+    return True
+
+
+def get_workflow(workflow_id: str, workdir: str | None = None) -> WorkflowDefinition | None:
     for workflow in workflow_catalog():
         if workflow.id == workflow_id:
             return workflow
+    if workdir:
+        for workflow in load_custom_workflows(workdir):
+            if workflow.id == workflow_id:
+                return workflow
     return None
 
 
-def validate_workflow(workflow: WorkflowDefinition) -> None:
+def get_workflow_detail(workflow_id: str, workdir: str | None = None) -> Dict[str, object] | None:
+    for workflow in workflow_catalog():
+        if workflow.id == workflow_id:
+            data = workflow_to_dict(workflow)
+            data.update({"editable": False, "source": "built-in"})
+            return data
+    if workdir:
+        for workflow in load_custom_workflows(workdir):
+            if workflow.id == workflow_id:
+                data = workflow_to_dict(workflow)
+                data.update({"editable": True, "source": "custom"})
+                return data
+    return None
+
+
+def clone_workflow(workdir: str, workflow_id: str, new_id: str | None = None, new_name: str | None = None) -> WorkflowDefinition:
+    source = get_workflow(workflow_id, workdir)
+    if source is None:
+        raise ValueError(f"Unknown workflow: {workflow_id}")
+
+    existing_ids = built_in_workflow_ids() | {workflow.id for workflow in load_custom_workflows(workdir)}
+    base_id = re.sub(r"[^A-Za-z0-9_-]+", "_", (new_id or f"{source.id}_copy")).strip("_")
+    candidate = base_id or "custom_workflow"
+    if candidate in existing_ids:
+        suffix = 2
+        while f"{candidate}_{suffix}" in existing_ids:
+            suffix += 1
+        candidate = f"{candidate}_{suffix}"
+
+    clone = workflow_from_dict(workflow_to_dict(source))
+    clone.id = candidate
+    clone.name = new_name or f"{source.name} copy"
+    return save_custom_workflow(workdir, clone)
+
+
+def workflow_validation_errors(workflow: WorkflowDefinition, reserved_ids: set[str] | None = None) -> List[str]:
+    try:
+        validate_workflow(workflow, reserved_ids=reserved_ids)
+    except ValueError as exc:
+        return [str(exc)]
+    return []
+
+
+def validate_workflow(workflow: WorkflowDefinition, reserved_ids: set[str] | None = None) -> None:
+    if not workflow.id:
+        raise ValueError("Workflow is missing id")
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", workflow.id):
+        raise ValueError("Workflow id may only contain letters, numbers, underscores, and hyphens")
+    if reserved_ids and workflow.id in reserved_ids:
+        raise ValueError(f"Workflow id is reserved: {workflow.id}")
+    if not workflow.name:
+        raise ValueError("Workflow is missing name")
+    if not workflow.steps:
+        raise ValueError("Workflow must contain at least one step")
+
     seen = set()
 
     def visit_step(step: WorkflowStep) -> None:
         if not step.id:
             raise ValueError("Workflow step is missing id")
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", step.id):
+            raise ValueError(f"Invalid step id: {step.id}")
         if step.id in seen:
             raise ValueError(f"Duplicate step id: {step.id}")
+        if step.type != "agentic_task":
+            raise ValueError(f"Invalid step type for {step.id}: {step.type}")
+        if step.role not in WORKFLOW_ROLES:
+            raise ValueError(f"Invalid role for step {step.id}: {step.role}")
         if step.max_iterations < 1 or step.max_iterations > 24:
             raise ValueError(f"Invalid max_iterations for step {step.id}")
         seen.add(step.id)
 
     for item in workflow.steps:
         if isinstance(item, WorkflowLoop):
+            if not item.id:
+                raise ValueError("Workflow loop is missing id")
+            if not re.fullmatch(r"[A-Za-z0-9_-]+", item.id):
+                raise ValueError(f"Invalid loop id: {item.id}")
             if item.max_iterations < 1 or item.max_iterations > 10:
                 raise ValueError(f"Invalid max_iterations for loop {item.id}")
+            if not item.steps:
+                raise ValueError(f"Loop {item.id} must contain at least one step")
             for step in item.steps:
                 visit_step(step)
         else:
@@ -426,6 +678,7 @@ class WorkflowRunner:
         progress_callback: WorkflowProgress = None,
         conversation_context: List[Dict[str, object]] | None = None,
         task_images: List[str] | None = None,
+        cancel_checker: Callable[[], bool] | None = None,
     ) -> str:
         validate_workflow(workflow)
         run = WorkflowRun(task=task, workflow_id=workflow.id)
@@ -442,12 +695,31 @@ class WorkflowRunner:
         })
 
         for item in workflow.steps:
-            if isinstance(item, WorkflowLoop):
-                self.run_loop(item, run, task, progress_callback, conversation_context, task_images)
-            else:
-                self.run_step(item, run, task, progress_callback, conversation_context, task_images)
+            if self.cancelled(cancel_checker, progress_callback, run):
+                break
 
-        run.status = workflow_status(run)
+            if isinstance(item, WorkflowLoop):
+                self.run_loop(
+                    item,
+                    run,
+                    task,
+                    progress_callback,
+                    conversation_context,
+                    task_images,
+                    cancel_checker,
+                )
+            else:
+                self.run_step(
+                    item,
+                    run,
+                    task,
+                    progress_callback,
+                    conversation_context,
+                    task_images,
+                    cancel_checker=cancel_checker,
+                )
+
+        run.status = "cancelled" if cancel_checker and cancel_checker() else workflow_status(run)
 
         summary = self.final_summary(workflow, run)
         append_workflow_minimal_log(self.agent, task, workflow, run, summary, self._current_debug_run_id)
@@ -470,6 +742,7 @@ class WorkflowRunner:
         progress_callback: WorkflowProgress,
         conversation_context: List[Dict[str, object]],
         task_images: List[str],
+        cancel_checker: Callable[[], bool] | None = None,
     ) -> None:
         self.emit(progress_callback, "workflow", f"Loop started: {loop.id}")
         self.log_full_event("loop_started", {
@@ -479,6 +752,9 @@ class WorkflowRunner:
         })
 
         for iteration in range(1, loop.max_iterations + 1):
+            if self.cancelled(cancel_checker, progress_callback, run):
+                return
+
             self.emit(progress_callback, "workflow", f"Loop {loop.id} iteration {iteration}/{loop.max_iterations}")
             self.log_full_event("loop_iteration_started", {
                 "loop_id": loop.id,
@@ -494,7 +770,11 @@ class WorkflowRunner:
                     conversation_context,
                     task_images,
                     loop_iteration=iteration,
+                    cancel_checker=cancel_checker,
                 )
+
+                if self.cancelled(cancel_checker, progress_callback, run):
+                    return
 
             if evaluate_condition(loop.until, run.results):
                 self.emit(progress_callback, "workflow", f"Loop {loop.id} condition met")
@@ -521,7 +801,18 @@ class WorkflowRunner:
         conversation_context: List[Dict[str, object]],
         task_images: List[str],
         loop_iteration: int | None = None,
+        cancel_checker: Callable[[], bool] | None = None,
     ) -> StepResult:
+        if cancel_checker and cancel_checker():
+            result = StepResult(step.id, "blocked", "Skipped because task was aborted.")
+            run.results[step.id] = result
+            self.emit(progress_callback, "workflow", f"Aborted before step {step.id}")
+            self.log_full_event("step_cancelled", {
+                "step_id": step.id,
+                "result": result.to_dict(),
+            })
+            return result
+
         if step.condition and not evaluate_condition(step.condition, run.results):
             result = StepResult(step.id, "skipped", f"Skipped because condition was false: {step.condition}")
             run.results[step.id] = result
@@ -549,15 +840,21 @@ class WorkflowRunner:
         })
 
         if step.type == "agentic_task":
+            step_progress_callback = self.step_progress_callback(
+                progress_callback,
+                step,
+                loop_iteration,
+            )
             raw = self.agent.run_agentic_task(
                 prompt,
-                progress_callback=progress_callback,
+                progress_callback=step_progress_callback,
                 conversation_context=conversation_context,
                 task_images=task_images,
                 selected_model=selected_model,
                 require_structured_result=True,
                 max_iterations=step.max_iterations,
                 run_log_id=self._current_debug_run_id,
+                cancel_checker=cancel_checker,
             )
         else:
             raw = f"Unsupported workflow step type: {step.type}"
@@ -581,6 +878,55 @@ class WorkflowRunner:
             "result": result.to_dict(),
         })
         return result
+
+    def cancelled(
+        self,
+        cancel_checker: Callable[[], bool] | None,
+        progress_callback: WorkflowProgress,
+        run: WorkflowRun,
+    ) -> bool:
+        if not cancel_checker or not cancel_checker():
+            return False
+
+        run.status = "cancelled"
+        self.emit(progress_callback, "workflow", "Workflow abort requested")
+        self.log_full_event("workflow_cancelled", {
+            "workflow_id": run.workflow_id,
+            "results": {
+                step_id: result.to_dict()
+                for step_id, result in run.results.items()
+            },
+        })
+        return True
+
+    def step_progress_callback(
+        self,
+        progress_callback: WorkflowProgress,
+        step: WorkflowStep,
+        loop_iteration: int | None = None,
+    ) -> WorkflowProgress:
+        if progress_callback is None:
+            return None
+
+        label = step.id if loop_iteration is None else f"{step.id} #{loop_iteration}"
+
+        def callback(event: Dict[str, object]) -> None:
+            if isinstance(event, dict):
+                enriched = dict(event)
+                enriched.setdefault("workflow_step", step.id)
+                enriched.setdefault("workflow_step_label", label)
+                enriched.setdefault("workflow_loop_iteration", loop_iteration)
+                progress_callback(enriched)
+            else:
+                progress_callback({
+                    "kind": "progress",
+                    "text": str(event),
+                    "workflow_step": step.id,
+                    "workflow_step_label": label,
+                    "workflow_loop_iteration": loop_iteration,
+                })
+
+        return callback
 
     def build_step_prompt(self, step: WorkflowStep, run: WorkflowRun, task: str) -> str:
         results = {

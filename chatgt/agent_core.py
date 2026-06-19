@@ -531,7 +531,11 @@ Rules:
         json_mode: bool = False,
         image_paths: List[str] | None = None,
         model: str | None = None,
+        cancel_checker: Callable[[], bool] | None = None,
     ) -> str:
+        if cancel_checker and cancel_checker():
+            return "Error: Task cancelled"
+
         if not self.wait_for_ollama():
             return "Error: Ollama is not responding after waiting"
 
@@ -596,11 +600,17 @@ Rules:
         elapsed = 0
 
         while not result_box["done"]:
+            if cancel_checker and cancel_checker():
+                return "Error: Task cancelled"
+
             time.sleep(self.heartbeat_seconds)
             elapsed += self.heartbeat_seconds
 
             if result_box["done"]:
                 break
+
+            if cancel_checker and cancel_checker():
+                return "Error: Task cancelled"
 
             if progress_callback:
                 progress_callback({
@@ -1341,7 +1351,16 @@ Rules:
         task_images: List[str],
         run_log_id: str | None,
         reason: str,
+        cancel_checker: Callable[[], bool] | None = None,
     ) -> str | None:
+        if cancel_checker and cancel_checker():
+            return json.dumps({
+                "status": "blocked",
+                "summary": "Task cancelled before finalization.",
+                "findings": ["Abort requested by user."],
+                "artifacts": [],
+            }, ensure_ascii=False)
+
         finalizer_prompt = self.build_structured_finalizer_prompt(task, history)
         self.log_action_loop_event(
             "structured_finalizer_started",
@@ -1359,6 +1378,7 @@ Rules:
             json_mode=True,
             image_paths=task_images,
             model=selected_model,
+            cancel_checker=cancel_checker,
         )
         self.log_action_loop_event(
             "structured_finalizer_finished",
@@ -1559,6 +1579,7 @@ Rules:
         require_structured_result: bool = False,
         max_iterations: int | None = None,
         run_log_id: str | None = None,
+        cancel_checker: Callable[[], bool] | None = None,
     ) -> str:
         history: List[Dict[str, object]] = []
         successful_action_counts: Dict[str, int] = {}
@@ -1580,9 +1601,13 @@ Rules:
             else:
                 print(event if isinstance(event, str) else json.dumps(event, indent=2))
 
+        task_started_text = "Task started."
+        if not require_structured_result:
+            task_started_text = f"Task started: {task}"
+
         emit({
             "kind": "status",
-            "text": f"Task started: {task}",
+            "text": task_started_text,
         })
 
         self.log_action_loop_event(
@@ -1597,6 +1622,23 @@ Rules:
         )
 
         for iteration in range(1, iteration_limit + 1):
+            if cancel_checker and cancel_checker():
+                final = "Task aborted."
+                emit({
+                    "kind": "status",
+                    "iteration": iteration,
+                    "text": final,
+                })
+                self.log_action_loop_event(
+                    "task_cancelled",
+                    {
+                        "iteration": iteration,
+                        "message": final,
+                    },
+                    run_log_id,
+                )
+                return final
+
             prompt = self.build_agent_prompt(
                 task,
                 history,
@@ -1619,6 +1661,7 @@ Rules:
                 json_mode=True,
                 image_paths=model_images(),
                 model=selected_model,
+                cancel_checker=cancel_checker,
             )
 
             emit({
@@ -1727,6 +1770,24 @@ Rules:
                 run_log_id,
             )
 
+            if cancel_checker and cancel_checker():
+                final = "Task aborted."
+                emit({
+                    "kind": "status",
+                    "iteration": iteration,
+                    "text": final,
+                })
+                self.log_action_loop_event(
+                    "task_cancelled_before_action",
+                    {
+                        "iteration": iteration,
+                        "action": action,
+                        "message": final,
+                    },
+                    run_log_id,
+                )
+                return final
+
             observation = self.execute_action(action_obj)
             if action == "browser_screenshot" and observation.get("success"):
                 screenshot_filename = str(observation.get("filename", "")).strip()
@@ -1771,6 +1832,7 @@ Rules:
                     json_mode=False,
                     image_paths=model_images(),
                     model=selected_model,
+                    cancel_checker=cancel_checker,
                 )
 
                 history.append({
@@ -1883,6 +1945,7 @@ Rules:
                         model_images(),
                         run_log_id,
                         reason=f"repeated successful action: {action}",
+                        cancel_checker=cancel_checker,
                     )
                     if finalized is not None:
                         return finalized
@@ -1944,6 +2007,7 @@ Rules:
                 model_images(),
                 run_log_id,
                 reason="iteration limit reached",
+                cancel_checker=cancel_checker,
             )
             if finalized is not None:
                 return finalized

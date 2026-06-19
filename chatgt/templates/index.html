@@ -334,7 +334,7 @@
         form {
             display: grid;
             grid-template-columns: auto minmax(150px, 220px) 1fr auto;
-            grid-template-rows: auto auto;
+            grid-template-rows: auto auto auto;
             gap: 8px;
             padding: 12px;
             background: #18212b;
@@ -374,6 +374,16 @@
             grid-row: 1;
         }
 
+        #abortTask {
+            grid-column: 4;
+            grid-row: 2;
+            min-height: 28px;
+            padding: 0 10px;
+            font-size: 12px;
+            border-radius: 8px;
+            background: #b84a45;
+        }
+
         .file-control {
             grid-column: 1;
             grid-row: 1;
@@ -401,7 +411,7 @@
 
         .selected-files {
             grid-column: 1 / -1;
-            grid-row: 2;
+            grid-row: 3;
             color: #9fb0c2;
             font-size: 12px;
             min-height: 16px;
@@ -421,6 +431,218 @@
             background: #101820;
             color: #d7e2ee;
             min-width: 0;
+        }
+
+        .workflow-button {
+            grid-column: 2;
+            grid-row: 2;
+            min-height: 28px;
+            padding: 0 10px;
+            font-size: 12px;
+            border-radius: 8px;
+            background: #243244;
+        }
+
+        .workflow-modal {
+            width: min(1180px, 98vw);
+        }
+
+        .workflow-editor {
+            display: grid;
+            grid-template-columns: 230px 1fr 320px;
+            gap: 12px;
+            min-height: 620px;
+        }
+
+        .workflow-list,
+        .workflow-panel,
+        .workflow-canvas-wrap {
+            border: 1px solid #283747;
+            border-radius: 10px;
+            background: #101820;
+            min-height: 0;
+        }
+
+        .workflow-list {
+            padding: 10px;
+            overflow: auto;
+        }
+
+        .workflow-list-item {
+            width: 100%;
+            margin: 0 0 8px;
+            padding: 9px;
+            border: 1px solid #283747;
+            border-radius: 8px;
+            background: #151d26;
+            color: #d7e2ee;
+            text-align: left;
+            font-weight: 500;
+        }
+
+        .workflow-list-item.active {
+            border-color: #32a852;
+            background: #183525;
+        }
+
+        .workflow-list-item small {
+            display: block;
+            margin-top: 3px;
+            color: #9fb0c2;
+            font-weight: 400;
+        }
+
+        .workflow-canvas-wrap {
+            position: relative;
+            overflow: auto;
+        }
+
+        .workflow-canvas-toolbar {
+            position: sticky;
+            top: 0;
+            z-index: 3;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            padding: 10px;
+            background: rgba(16, 24, 32, 0.94);
+            border-bottom: 1px solid #283747;
+        }
+
+        .workflow-canvas {
+            position: relative;
+            min-width: 860px;
+            min-height: 540px;
+        }
+
+        .workflow-connectors {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+
+        .workflow-node {
+            position: absolute;
+            width: 190px;
+            min-height: 74px;
+            border: 1px solid #34506a;
+            border-radius: 8px;
+            background: #182433;
+            color: #f3f7fb;
+            padding: 10px;
+            cursor: grab;
+            user-select: none;
+        }
+
+        .workflow-node.loop {
+            border-color: #7a5cc2;
+            background: #211c36;
+        }
+
+        .workflow-node.selected {
+            outline: 2px solid #32a852;
+        }
+
+        .workflow-node-title {
+            font-weight: 700;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .workflow-node-meta {
+            margin-top: 5px;
+            color: #9fb0c2;
+            font-size: 12px;
+        }
+
+        .workflow-panel {
+            padding: 10px;
+            overflow: auto;
+        }
+
+        .workflow-panel label {
+            display: block;
+            margin: 9px 0 4px;
+            color: #9fb0c2;
+            font-size: 12px;
+        }
+
+        .workflow-panel input,
+        .workflow-panel select,
+        .workflow-panel textarea {
+            width: 100%;
+            border: 1px solid #314153;
+            border-radius: 8px;
+            padding: 8px;
+            font: inherit;
+            font-size: 13px;
+            background: #0f151b;
+            color: #f3f7fb;
+        }
+
+        .workflow-panel input.workflow-invalid {
+            border-color: #ff6f61;
+            box-shadow: 0 0 0 1px rgba(255, 111, 97, 0.35);
+            background: #211318;
+        }
+
+        .workflow-panel textarea {
+            min-height: 78px;
+            resize: vertical;
+        }
+
+        .workflow-errors {
+            margin-top: 10px;
+            color: #ffb2a8;
+            font-size: 12px;
+            white-space: pre-wrap;
+        }
+
+        .workflow-field-heading {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin: 9px 0 4px;
+        }
+
+        .workflow-field-heading label {
+            margin: 0;
+        }
+
+        .workflow-help-button {
+            border: 1px solid #314153;
+            border-radius: 999px;
+            width: 22px;
+            height: 22px;
+            padding: 0;
+            background: #182433;
+            color: #d7e2ee;
+            font-size: 12px;
+            line-height: 22px;
+            text-align: center;
+        }
+
+        .workflow-help-box {
+            margin: 8px 0;
+            padding: 9px;
+            border: 1px solid #314153;
+            border-radius: 8px;
+            background: #0b1117;
+            color: #c8d6e5;
+            font-size: 12px;
+            line-height: 1.45;
+            white-space: pre-wrap;
+        }
+
+        .workflow-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 10px;
         }
 
         .message-images {
@@ -475,7 +697,7 @@
             form {
                 padding: 10px;
                 grid-template-columns: auto 1fr auto;
-                grid-template-rows: auto auto auto;
+                grid-template-rows: auto auto auto auto auto;
             }
 
             .workflow-select {
@@ -484,22 +706,38 @@
                 min-height: 40px;
             }
 
-            .file-control {
+            .workflow-button {
+                grid-column: 1 / -1;
                 grid-row: 2;
+                min-height: 34px;
+            }
+
+            .file-control {
+                grid-row: 3;
             }
 
             textarea {
                 grid-column: 2;
-                grid-row: 2;
+                grid-row: 3;
             }
 
             #send {
                 grid-column: 3;
-                grid-row: 2;
+                grid-row: 3;
+            }
+
+            #abortTask {
+                grid-column: 1 / -1;
+                grid-row: 4;
+                min-height: 34px;
             }
 
             .selected-files {
-                grid-row: 3;
+                grid-row: 5;
+            }
+
+            .workflow-editor {
+                grid-template-columns: 1fr;
             }
 
             button {
@@ -638,6 +876,62 @@
         </div>
     </div>
 
+    <div class="modal-backdrop" id="workflowModal" hidden>
+        <div class="modal workflow-modal">
+            <div class="modal-header">
+                <strong>Workflows</strong>
+                <button class="small-button" id="closeWorkflowEditor">Close</button>
+            </div>
+
+            <div class="modal-body">
+                <div class="workflow-editor">
+                    <div class="workflow-list">
+                        <div class="workflow-actions">
+                            <button class="small-button" id="newWorkflow">New</button>
+                            <button class="small-button" id="cloneWorkflow">Clone</button>
+                            <button class="small-button" id="importWorkflow">Import</button>
+                            <input id="workflowImportFile" type="file" accept="application/json,.json" hidden />
+                        </div>
+                        <div id="workflowList"></div>
+                    </div>
+
+                    <div class="workflow-canvas-wrap" id="workflowCanvasWrap">
+                        <div class="workflow-canvas-toolbar">
+                            <button class="small-button" id="addWorkflowStep">Add step</button>
+                            <button class="small-button" id="addWorkflowLoop">Add loop</button>
+                            <button class="small-button" id="deleteWorkflowNode">Delete node</button>
+                            <button class="small-button" id="moveWorkflowNodeUp">Move up</button>
+                            <button class="small-button" id="moveWorkflowNodeDown">Move down</button>
+                        </div>
+                        <div class="workflow-canvas" id="workflowCanvas">
+                            <svg class="workflow-connectors" id="workflowConnectors"></svg>
+                        </div>
+                    </div>
+
+                    <div class="workflow-panel">
+                        <label for="workflowIdInput">Workflow id</label>
+                        <input id="workflowIdInput" />
+
+                        <label for="workflowNameInput">Name</label>
+                        <input id="workflowNameInput" />
+
+                        <label for="workflowDescriptionInput">Description</label>
+                        <textarea id="workflowDescriptionInput"></textarea>
+
+                        <div id="workflowNodeEditor"></div>
+                        <div class="workflow-errors" id="workflowErrors"></div>
+
+                        <div class="workflow-actions">
+                            <button class="small-button" id="saveWorkflow">Save</button>
+                            <button class="small-button" id="deleteWorkflow">Delete</button>
+                            <button class="small-button" id="exportWorkflow">Export</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div class="meta" id="meta">
         Model: {{ model }} | Think: {{ think_mode }} | Workdir: {{ workdir }}
     </div>
@@ -652,8 +946,10 @@
         <select class="workflow-select" id="workflowSelect" title="Workflow">
             <option value="">Normal agent</option>
         </select>
+        <button class="workflow-button" id="workflowEditorButton" type="button">Workflows</button>
         <textarea id="task" placeholder="Type a task..." autofocus></textarea>
         <button id="send" type="submit">Send</button>
+        <button id="abortTask" type="button" disabled>Abort</button>
         <div class="selected-files" id="selectedFiles"></div>
     </form>
 
@@ -664,6 +960,7 @@
         const imageInput = document.getElementById("images");
         const workflowSelect = document.getElementById("workflowSelect");
         const sendButton = document.getElementById("send");
+        const abortTaskButton = document.getElementById("abortTask");
         const selectedFiles = document.getElementById("selectedFiles");
         const clearButton = document.getElementById("clear");
         const helpButton = document.getElementById("help");
@@ -673,6 +970,30 @@
         const closeHelpButton = document.getElementById("closeHelp");
         const closeContextButton = document.getElementById("closeContext");
         const saveContextButton = document.getElementById("saveContext");
+        const workflowEditorButton = document.getElementById("workflowEditorButton");
+        const workflowModal = document.getElementById("workflowModal");
+        const closeWorkflowEditorButton = document.getElementById("closeWorkflowEditor");
+        const workflowList = document.getElementById("workflowList");
+        const workflowCanvasWrap = document.getElementById("workflowCanvasWrap");
+        const workflowCanvas = document.getElementById("workflowCanvas");
+        const workflowConnectors = document.getElementById("workflowConnectors");
+        const workflowNodeEditor = document.getElementById("workflowNodeEditor");
+        const workflowErrors = document.getElementById("workflowErrors");
+        const workflowIdInput = document.getElementById("workflowIdInput");
+        const workflowNameInput = document.getElementById("workflowNameInput");
+        const workflowDescriptionInput = document.getElementById("workflowDescriptionInput");
+        const newWorkflowButton = document.getElementById("newWorkflow");
+        const cloneWorkflowButton = document.getElementById("cloneWorkflow");
+        const importWorkflowButton = document.getElementById("importWorkflow");
+        const workflowImportFile = document.getElementById("workflowImportFile");
+        const addWorkflowStepButton = document.getElementById("addWorkflowStep");
+        const addWorkflowLoopButton = document.getElementById("addWorkflowLoop");
+        const deleteWorkflowNodeButton = document.getElementById("deleteWorkflowNode");
+        const moveWorkflowNodeUpButton = document.getElementById("moveWorkflowNodeUp");
+        const moveWorkflowNodeDownButton = document.getElementById("moveWorkflowNodeDown");
+        const saveWorkflowButton = document.getElementById("saveWorkflow");
+        const deleteWorkflowButton = document.getElementById("deleteWorkflow");
+        const exportWorkflowButton = document.getElementById("exportWorkflow");
         const recentContextMessagesInput = document.getElementById("recentContextMessages");
         const recentContextCharsInput = document.getElementById("recentContextChars");
         const contextTargetTokensInput = document.getElementById("contextTargetTokens");
@@ -693,6 +1014,15 @@
         let lastRenderedSignature = "";
         let renderTimer = null;
         let installedModels = [];
+        let workflowSummaries = [];
+        let currentWorkflow = null;
+        let selectedWorkflowMeta = null;
+        let selectedNodePath = null;
+        let draggedNodePath = null;
+        let dragOffset = { x: 0, y: 0 };
+        let abortRequested = false;
+        const workflowNodePositions = new Map();
+        let workflowConnectorFrame = null;
 
         function scrollToBottomSoon() {
             requestAnimationFrame(() => {
@@ -764,6 +1094,38 @@
             return keys;
         }
 
+        function isWorkflowTaskStart(item) {
+            const text = String(item && item.text ? item.text : "");
+            return item && item.kind === "status" && text.startsWith("Task started: Workflow step:");
+        }
+
+        function progressDisplayText(item) {
+            if (!item) {
+                return "";
+            }
+
+            if (isWorkflowTaskStart(item)) {
+                return "Workflow step prompt prepared.";
+            }
+
+            return String(item.text || "");
+        }
+
+        function shortProgressText(text, maxLength) {
+            const value = String(text || "");
+            if (value.length <= maxLength) {
+                return value;
+            }
+            return value.slice(0, maxLength) + "...";
+        }
+
+        function workflowSummaryItem(items) {
+            return items.find(i => i.kind === "summary") ||
+                items.find(i => i.kind === "status" && !isWorkflowTaskStart(i)) ||
+                items.find(i => !isWorkflowTaskStart(i)) ||
+                null;
+        }
+
         function addProgressGroup(progressItems, groupIndex, openDetailKeys) {
             const row = makeRow("progress");
             const groupKey = "progress:" + groupIndex;
@@ -776,12 +1138,10 @@
             const summary = document.createElement("summary");
 
             const latest = progressItems.length
-                ? progressItems[progressItems.length - 1].text
+                ? progressDisplayText(progressItems[progressItems.length - 1])
                 : "No progress yet";
 
-            const latestShort = latest && latest.length > 80
-                ? latest.slice(0, 80) + "..."
-                : latest;
+            const latestShort = shortProgressText(latest, 80);
 
             summary.textContent =
                 "Progress details (" + progressItems.length + ") - latest: " + latestShort;
@@ -789,20 +1149,20 @@
             const content = document.createElement("div");
             content.className = "progress-content";
 
-            const steps = new Map();
+            const workflowGroups = new Map();
 
             for (const item of progressItems) {
-                const iteration = item.iteration || "general";
+                const workflowLabel = item.workflow_step_label || item.workflow_step || "General";
 
-                if (!steps.has(iteration)) {
-                    steps.set(iteration, []);
+                if (!workflowGroups.has(workflowLabel)) {
+                    workflowGroups.set(workflowLabel, []);
                 }
 
-                steps.get(iteration).push(item);
+                workflowGroups.get(workflowLabel).push(item);
             }
 
-            for (const [iteration, items] of steps.entries()) {
-                const stepKey = groupKey + ":step:" + iteration;
+            for (const [workflowLabel, items] of workflowGroups.entries()) {
+                const stepKey = groupKey + ":workflow-step:" + workflowLabel;
                 const step = document.createElement("details");
                 step.className = "step";
                 step.dataset.detailKey = stepKey;
@@ -810,16 +1170,14 @@
 
                 const stepSummary = document.createElement("summary");
 
-                const summaryItem =
-                    items.find(i => i.kind === "summary") ||
-                    items.find(i => i.kind === "status") ||
-                    items[items.length - 1];
-
-                const action = summaryItem.action ? " - " + summaryItem.action : "";
+                const summaryItem = workflowSummaryItem(items);
+                const action = summaryItem && summaryItem.action ? " - " + summaryItem.action : "";
+                const headerText = summaryItem ? shortProgressText(progressDisplayText(summaryItem), 90) : "";
+                const headerSuffix = headerText ? ": " + headerText : "";
                 stepSummary.textContent =
-                    iteration === "general"
+                    workflowLabel === "General"
                         ? "General progress"
-                        : "Step " + iteration + action + ": " + summaryItem.text;
+                        : "Workflow step " + workflowLabel + action + headerSuffix;
 
                 const body = document.createElement("div");
                 body.className = "step-body";
@@ -827,11 +1185,13 @@
                 for (const item of items) {
                     const label = document.createElement("div");
                     label.className = "label";
-                    label.textContent = item.kind || "progress";
+                    const iterationText = item.iteration ? "iteration " + item.iteration + " · " : "";
+                    const actionText = item.action ? " · " + item.action : "";
+                    label.textContent = iterationText + (item.kind || "progress") + actionText;
                     body.appendChild(label);
 
                     const isRaw = item.kind === "model_output";
-                    body.appendChild(makePre(item.text || "", isRaw ? "raw-model-output" : ""));
+                    body.appendChild(makePre(progressDisplayText(item), isRaw ? "raw-model-output" : ""));
                 }
 
                 step.appendChild(stepSummary);
@@ -866,6 +1226,7 @@
 
             const wasNearBottom =
                 chat.scrollTop + chat.clientHeight >= chat.scrollHeight - 120;
+            const previousScrollTop = chat.scrollTop;
 
             chat.innerHTML = "";
 
@@ -897,16 +1258,22 @@
 
             lastRenderedSignature = signature;
 
-            if (running || wasNearBottom) {
+            if (wasNearBottom) {
                 scrollToBottomSoon();
+            } else {
+                chat.scrollTop = previousScrollTop;
             }
 
             chat.style.display = "none";
             chat.offsetHeight;
             chat.style.display = "block";
 
-            if (running || wasNearBottom) {
+            if (wasNearBottom) {
                 scrollToBottomSoon();
+            } else {
+                requestAnimationFrame(() => {
+                    chat.scrollTop = previousScrollTop;
+                });
             }
         }
 
@@ -1035,6 +1402,7 @@
             try {
                 const res = await fetch("/workflows", { cache: "no-store" });
                 const data = await res.json();
+                workflowSummaries = data.workflows || [];
 
                 workflowSelect.innerHTML = "";
 
@@ -1043,16 +1411,487 @@
                 normalOption.textContent = "Normal agent";
                 workflowSelect.appendChild(normalOption);
 
-                for (const workflow of data.workflows || []) {
+                for (const workflow of workflowSummaries) {
                     const option = document.createElement("option");
                     option.value = workflow.id;
-                    option.textContent = workflow.name;
+                    option.textContent = workflow.name + (workflow.editable ? " *" : "");
                     option.title = workflow.description || "";
                     workflowSelect.appendChild(option);
                 }
+                renderWorkflowList();
             } catch (err) {
                 console.error("Could not load workflows:", err);
             }
+        }
+
+        function emptyWorkflow() {
+            return {
+                id: "custom_workflow",
+                name: "Custom workflow",
+                description: "",
+                steps: [
+                    {
+                        kind: "step",
+                        id: "step_1",
+                        type: "agentic_task",
+                        role: "default",
+                        prompt: "Complete this workflow step.",
+                        condition: "",
+                        tool_guidance: "",
+                        max_iterations: 8
+                    }
+                ]
+            };
+        }
+
+        function flattenWorkflowNodes(workflow) {
+            const nodes = [];
+            (workflow.steps || []).forEach((item, index) => {
+                if (item.kind === "loop" || item.until !== undefined) {
+                    nodes.push({ item, path: [index], level: 0, kind: "loop" });
+                    (item.steps || []).forEach((step, stepIndex) => {
+                        nodes.push({ item: step, path: [index, stepIndex], level: 1, kind: "step" });
+                    });
+                } else {
+                    nodes.push({ item, path: [index], level: 0, kind: "step" });
+                }
+            });
+            return nodes;
+        }
+
+        function pathKey(path) {
+            return Array.isArray(path) ? path.join(".") : "";
+        }
+
+        function getWorkflowItem(path) {
+            if (!currentWorkflow || !Array.isArray(path)) return null;
+            if (path.length === 1) return currentWorkflow.steps[path[0]] || null;
+            const loop = currentWorkflow.steps[path[0]];
+            return loop && Array.isArray(loop.steps) ? loop.steps[path[1]] || null : null;
+        }
+
+        function setWorkflowItem(path, item) {
+            if (path.length === 1) currentWorkflow.steps[path[0]] = item;
+            else currentWorkflow.steps[path[0]].steps[path[1]] = item;
+        }
+
+        function workflowEditable() {
+            return !selectedWorkflowMeta || selectedWorkflowMeta.editable !== false;
+        }
+
+        function validateWorkflowClient(workflow) {
+            const errors = [];
+            const ids = new Set();
+            if (!workflow.id || !/^[A-Za-z0-9_-]+$/.test(workflow.id)) errors.push("Workflow id is required and may only contain letters, numbers, underscores, and hyphens.");
+            if (!workflow.name) errors.push("Workflow name is required.");
+            if (!Array.isArray(workflow.steps) || workflow.steps.length === 0) errors.push("Workflow must contain at least one step.");
+
+            function checkStep(step) {
+                if (!step.id || !/^[A-Za-z0-9_-]+$/.test(step.id)) errors.push("Every step needs a valid id.");
+                if (ids.has(step.id)) errors.push("Duplicate step id: " + step.id);
+                ids.add(step.id);
+                if (!["default", "router", "planner", "coding", "vision"].includes(step.role || "default")) errors.push("Invalid role for step " + step.id);
+                const max = Number(step.max_iterations || 0);
+                if (max < 1 || max > 24) errors.push("Step " + step.id + " max iterations must be 1-24.");
+                const conditionError = conditionSyntaxError(step.condition || "", ids);
+                if (conditionError) errors.push("Condition for step " + (step.id || "(missing)") + ": " + conditionError);
+            }
+
+            for (const item of workflow.steps || []) {
+                if (item.kind === "loop" || item.until !== undefined) {
+                    if (!item.id || !/^[A-Za-z0-9_-]+$/.test(item.id)) errors.push("Every loop needs a valid id.");
+                    const max = Number(item.max_iterations || 0);
+                    if (max < 1 || max > 10) errors.push("Loop " + item.id + " max iterations must be 1-10.");
+                    if (!Array.isArray(item.steps) || item.steps.length === 0) errors.push("Loop " + item.id + " must contain at least one step.");
+                    for (const step of item.steps || []) checkStep(step);
+                    const untilError = conditionSyntaxError(item.until || "", ids);
+                    if (untilError) errors.push("Until condition for loop " + (item.id || "(missing)") + ": " + untilError);
+                } else {
+                    checkStep(item);
+                }
+            }
+
+            return errors;
+        }
+
+        function allWorkflowStepIds(workflow) {
+            const ids = new Set();
+            for (const node of flattenWorkflowNodes(workflow || { steps: [] })) {
+                if (node.kind === "step" && node.item.id) {
+                    ids.add(node.item.id);
+                }
+            }
+            return ids;
+        }
+
+        function conditionSyntaxError(condition, knownIds) {
+            const text = String(condition || "").trim();
+            if (!text) return "";
+            const match = text.match(/^([A-Za-z0-9_-]+)\.(status|findings_count)\s*(==|!=|>=|<=|>|<)\s*(?:"([^"]*)"|(\d+))$/);
+            if (!match) {
+                return 'Use syntax like check.status == "passed" or check.findings_count > 0.';
+            }
+            const stepId = match[1];
+            const field = match[2];
+            const textValue = match[4];
+            const numberValue = match[5];
+            if (knownIds && !knownIds.has(stepId)) {
+                return "Unknown step id: " + stepId;
+            }
+            if (field === "status" && textValue === undefined) {
+                return 'Status comparisons need a quoted value, for example check.status == "passed".';
+            }
+            if (field === "findings_count" && numberValue === undefined) {
+                return "findings_count comparisons need a number, for example check.findings_count > 0.";
+            }
+            return "";
+        }
+
+        function renderWorkflowList() {
+            workflowList.innerHTML = "";
+            for (const workflow of workflowSummaries) {
+                const button = document.createElement("button");
+                button.className = "workflow-list-item" + (currentWorkflow && workflow.id === currentWorkflow.id ? " active" : "");
+                button.textContent = workflow.name || workflow.id;
+                const meta = document.createElement("small");
+                meta.textContent = workflow.id + " | " + (workflow.source || "custom") + (workflow.editable ? " | editable" : " | read-only");
+                button.appendChild(meta);
+                button.addEventListener("click", () => loadWorkflowDetail(workflow.id));
+                workflowList.appendChild(button);
+            }
+        }
+
+        function renderWorkflowCanvas() {
+            for (const child of Array.from(workflowCanvas.children)) {
+                if (child !== workflowConnectors) child.remove();
+            }
+            workflowConnectors.innerHTML = "";
+            if (!currentWorkflow) return;
+
+            const nodes = flattenWorkflowNodes(currentWorkflow);
+            nodes.forEach((node, index) => {
+                const stored = workflowNodePositions.get(currentWorkflow.id + ":" + pathKey(node.path));
+                const x = stored ? stored.x : 50 + node.level * 250;
+                const y = stored ? stored.y : 60 + index * 110;
+
+                const div = document.createElement("div");
+                div.className = "workflow-node " + node.kind + (pathKey(node.path) === pathKey(selectedNodePath) ? " selected" : "");
+                div.style.left = x + "px";
+                div.style.top = y + "px";
+                div.dataset.path = pathKey(node.path);
+                div.innerHTML =
+                    '<div class="workflow-node-title"></div><div class="workflow-node-meta"></div>';
+                div.querySelector(".workflow-node-title").textContent = node.item.id || "(missing id)";
+                div.querySelector(".workflow-node-meta").textContent =
+                    node.kind === "loop"
+                        ? "loop | until " + (node.item.until || "(empty)")
+                        : "step | " + (node.item.role || "default");
+                div.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    selectedNodePath = node.path;
+                    renderWorkflowEditor();
+                });
+                div.addEventListener("mousedown", (e) => {
+                    draggedNodePath = node.path;
+                    const rect = div.getBoundingClientRect();
+                    dragOffset = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+                });
+                workflowCanvas.appendChild(div);
+            });
+
+            redrawWorkflowConnectors();
+        }
+
+        function redrawWorkflowConnectors() {
+            workflowConnectorFrame = null;
+            workflowConnectors.innerHTML = "";
+            if (!currentWorkflow) return;
+            resizeWorkflowCanvasToNodes();
+            const nodes = flattenWorkflowNodes(currentWorkflow);
+            const canvasRect = workflowCanvas.getBoundingClientRect();
+
+            for (let i = 0; i < nodes.length - 1; i += 1) {
+                const fromNode = workflowCanvas.querySelector('[data-path="' + pathKey(nodes[i].path) + '"]');
+                const toNode = workflowCanvas.querySelector('[data-path="' + pathKey(nodes[i + 1].path) + '"]');
+                if (!fromNode || !toNode) continue;
+
+                const from = fromNode.getBoundingClientRect();
+                const to = toNode.getBoundingClientRect();
+                const fromRight = from.right - canvasRect.left;
+                const fromLeft = from.left - canvasRect.left;
+                const toRight = to.right - canvasRect.left;
+                const toLeft = to.left - canvasRect.left;
+                const fromX = fromRight <= toLeft ? fromRight : fromLeft;
+                const toX = fromRight <= toLeft ? toLeft : toRight;
+                const fromY = from.top - canvasRect.top + from.height / 2;
+                const toY = to.top - canvasRect.top + to.height / 2;
+
+                const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+                line.setAttribute("x1", String(fromX));
+                line.setAttribute("y1", String(fromY));
+                line.setAttribute("x2", String(toX));
+                line.setAttribute("y2", String(toY));
+                line.setAttribute("stroke", "#456178");
+                line.setAttribute("stroke-width", "2");
+                line.setAttribute("stroke-linecap", "round");
+                workflowConnectors.appendChild(line);
+            }
+        }
+
+        function scheduleWorkflowConnectorRedraw() {
+            if (workflowConnectorFrame !== null) return;
+            workflowConnectorFrame = requestAnimationFrame(redrawWorkflowConnectors);
+        }
+
+        function resizeWorkflowCanvasToNodes() {
+            let width = 860;
+            let height = 540;
+            for (const node of workflowCanvas.querySelectorAll(".workflow-node")) {
+                width = Math.max(width, node.offsetLeft + node.offsetWidth + 80);
+                height = Math.max(height, node.offsetTop + node.offsetHeight + 80);
+            }
+            workflowCanvas.style.minWidth = width + "px";
+            workflowCanvas.style.minHeight = height + "px";
+            workflowConnectors.setAttribute("width", String(width));
+            workflowConnectors.setAttribute("height", String(height));
+            workflowConnectors.style.width = width + "px";
+            workflowConnectors.style.height = height + "px";
+        }
+
+        function field(labelText, input) {
+            const label = document.createElement("label");
+            label.textContent = labelText;
+            workflowNodeEditor.appendChild(label);
+            workflowNodeEditor.appendChild(input);
+            return input;
+        }
+
+        function conditionHelpText() {
+            return [
+                "Conditions are checked against structured workflow step results, not raw response text.",
+                "",
+                "Each step returns a result object with fields like:",
+                "- status: passed, failed, needs_changes, blocked, skipped",
+                "- findings_count: number of findings in that step result",
+                "",
+                "Supported syntax:",
+                'step_id.status == "passed"',
+                'step_id.status != "passed"',
+                "step_id.findings_count > 0",
+                "step_id.findings_count >= 2",
+                "",
+                "A step condition decides whether that step runs. If false, the step is skipped.",
+                "A loop until condition decides whether the loop stops after an iteration.",
+                "",
+                "Examples:",
+                'check.status != "passed" means run this step only when check did not pass.',
+                'visual_check.status == "passed" means stop the loop once visual_check passes.'
+            ].join("\n");
+        }
+
+        function conditionField(labelText, value, onInput) {
+            const wrapper = document.createElement("div");
+            wrapper.className = "workflow-field-heading";
+            const label = document.createElement("label");
+            label.textContent = labelText;
+            const help = document.createElement("button");
+            help.type = "button";
+            help.className = "workflow-help-button";
+            help.textContent = "?";
+            help.title = "How workflow conditions work";
+            wrapper.appendChild(label);
+            wrapper.appendChild(help);
+            workflowNodeEditor.appendChild(wrapper);
+
+            const input = makeInput(value, onInput);
+            workflowNodeEditor.appendChild(input);
+
+            const helpBox = document.createElement("div");
+            helpBox.className = "workflow-help-box";
+            helpBox.textContent = conditionHelpText();
+            helpBox.hidden = true;
+            workflowNodeEditor.appendChild(helpBox);
+
+            help.addEventListener("click", () => {
+                helpBox.hidden = !helpBox.hidden;
+            });
+
+            function updateConditionState() {
+                const error = conditionSyntaxError(input.value, allWorkflowStepIds(currentWorkflow));
+                input.classList.toggle("workflow-invalid", Boolean(error));
+                input.title = error || "";
+            }
+
+            input.addEventListener("input", updateConditionState);
+            updateConditionState();
+
+            return input;
+        }
+
+        function makeInput(value, onInput, type) {
+            const input = document.createElement("input");
+            input.type = type || "text";
+            input.value = value || "";
+            input.disabled = !workflowEditable();
+            input.addEventListener("input", () => {
+                onInput(input.value);
+                renderWorkflowCanvas();
+                renderWorkflowErrors();
+            });
+            return input;
+        }
+
+        function makeTextarea(value, onInput) {
+            const input = document.createElement("textarea");
+            input.value = value || "";
+            input.disabled = !workflowEditable();
+            input.addEventListener("input", () => {
+                onInput(input.value);
+                renderWorkflowErrors();
+            });
+            return input;
+        }
+
+        function renderWorkflowNodeEditor() {
+            workflowNodeEditor.innerHTML = "";
+            const item = getWorkflowItem(selectedNodePath);
+            if (!item) {
+                workflowNodeEditor.textContent = "Select a node to edit its step or loop settings.";
+                return;
+            }
+            const isLoop = item.kind === "loop" || item.until !== undefined;
+            field(isLoop ? "Loop id" : "Step id", makeInput(item.id, value => { item.id = value; }));
+            if (isLoop) {
+                conditionField("Until condition", item.until, value => { item.until = value; });
+                field("Max iterations", makeInput(item.max_iterations, value => { item.max_iterations = Number(value || 1); }, "number"));
+            } else {
+                const role = document.createElement("select");
+                for (const value of ["default", "router", "planner", "coding", "vision"]) {
+                    const option = document.createElement("option");
+                    option.value = value;
+                    option.textContent = value;
+                    role.appendChild(option);
+                }
+                role.value = item.role || "default";
+                role.disabled = !workflowEditable();
+                role.addEventListener("change", () => { item.role = role.value; renderWorkflowCanvas(); });
+                field("Role", role);
+                conditionField("Condition", item.condition, value => { item.condition = value; });
+                field("Max iterations", makeInput(item.max_iterations, value => { item.max_iterations = Number(value || 1); }, "number"));
+                field("Prompt", makeTextarea(item.prompt, value => { item.prompt = value; }));
+                field("Tool guidance", makeTextarea(item.tool_guidance, value => { item.tool_guidance = value; }));
+            }
+        }
+
+        function renderWorkflowErrors() {
+            const errors = currentWorkflow ? validateWorkflowClient(currentWorkflow) : [];
+            workflowErrors.textContent = errors.join("\n");
+            saveWorkflowButton.disabled = !workflowEditable() || errors.length > 0;
+        }
+
+        function renderWorkflowEditor() {
+            const editable = workflowEditable();
+            workflowIdInput.disabled = !editable;
+            workflowNameInput.disabled = !editable;
+            workflowDescriptionInput.disabled = !editable;
+            addWorkflowStepButton.disabled = !editable;
+            addWorkflowLoopButton.disabled = !editable;
+            deleteWorkflowNodeButton.disabled = !editable || !selectedNodePath;
+            moveWorkflowNodeUpButton.disabled = !editable || !selectedNodePath;
+            moveWorkflowNodeDownButton.disabled = !editable || !selectedNodePath;
+            deleteWorkflowButton.disabled = !editable || !currentWorkflow;
+            exportWorkflowButton.disabled = !currentWorkflow;
+            cloneWorkflowButton.disabled = !currentWorkflow;
+
+            if (currentWorkflow) {
+                workflowIdInput.value = currentWorkflow.id || "";
+                workflowNameInput.value = currentWorkflow.name || "";
+                workflowDescriptionInput.value = currentWorkflow.description || "";
+            }
+            renderWorkflowList();
+            renderWorkflowCanvas();
+            renderWorkflowNodeEditor();
+            renderWorkflowErrors();
+        }
+
+        async function loadWorkflowDetail(id) {
+            const res = await fetch("/workflows/" + encodeURIComponent(id), { cache: "no-store" });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || "Could not load workflow");
+            currentWorkflow = data.workflow;
+            selectedWorkflowMeta = data.workflow;
+            selectedNodePath = currentWorkflow.steps && currentWorkflow.steps.length ? [0] : null;
+            renderWorkflowEditor();
+        }
+
+        function addWorkflowStepToCurrent() {
+            if (!currentWorkflow || !workflowEditable()) return;
+            const step = {
+                kind: "step",
+                id: "step_" + (flattenWorkflowNodes(currentWorkflow).length + 1),
+                type: "agentic_task",
+                role: "default",
+                prompt: "Complete this workflow step.",
+                condition: "",
+                tool_guidance: "",
+                max_iterations: 8
+            };
+            const item = getWorkflowItem(selectedNodePath);
+            if (item && (item.kind === "loop" || item.until !== undefined)) {
+                item.steps = item.steps || [];
+                item.steps.push(step);
+                selectedNodePath = [selectedNodePath[0], item.steps.length - 1];
+            } else {
+                currentWorkflow.steps.push(step);
+                selectedNodePath = [currentWorkflow.steps.length - 1];
+            }
+            renderWorkflowEditor();
+        }
+
+        function addWorkflowLoopToCurrent() {
+            if (!currentWorkflow || !workflowEditable()) return;
+            currentWorkflow.steps.push({
+                kind: "loop",
+                id: "loop_" + (currentWorkflow.steps.length + 1),
+                until: 'check.status == "passed"',
+                max_iterations: 2,
+                steps: [
+                    {
+                        kind: "step",
+                        id: "check",
+                        type: "agentic_task",
+                        role: "coding",
+                        prompt: "Check the result.",
+                        condition: "",
+                        tool_guidance: "",
+                        max_iterations: 4
+                    }
+                ]
+            });
+            selectedNodePath = [currentWorkflow.steps.length - 1];
+            renderWorkflowEditor();
+        }
+
+        function deleteWorkflowNode() {
+            if (!currentWorkflow || !workflowEditable() || !selectedNodePath) return;
+            if (selectedNodePath.length === 1) currentWorkflow.steps.splice(selectedNodePath[0], 1);
+            else currentWorkflow.steps[selectedNodePath[0]].steps.splice(selectedNodePath[1], 1);
+            selectedNodePath = currentWorkflow.steps.length ? [0] : null;
+            renderWorkflowEditor();
+        }
+
+        function moveWorkflowNode(delta) {
+            if (!currentWorkflow || !workflowEditable() || !selectedNodePath) return;
+            const list = selectedNodePath.length === 1
+                ? currentWorkflow.steps
+                : currentWorkflow.steps[selectedNodePath[0]].steps;
+            const index = selectedNodePath[selectedNodePath.length - 1];
+            const next = index + delta;
+            if (next < 0 || next >= list.length) return;
+            const [item] = list.splice(index, 1);
+            list.splice(next, 0, item);
+            selectedNodePath = selectedNodePath.length === 1 ? [next] : [selectedNodePath[0], next];
+            renderWorkflowEditor();
         }
 
         async function loadMessages() {
@@ -1062,9 +1901,15 @@
 
                 renderMessages(data.messages || [], data.running === true);
 
+                if (data.running !== true) {
+                    abortRequested = false;
+                }
+
                 sendButton.disabled = data.running === true;
+                abortTaskButton.disabled = data.running !== true || abortRequested;
                 imageInput.disabled = data.running === true;
                 workflowSelect.disabled = data.running === true;
+                workflowEditorButton.disabled = data.running === true;
                 modelSelect.disabled = data.running === true;
                 contextSettingsButton.disabled = data.running === true;
                 routerModelSelect.disabled = data.running === true;
@@ -1117,6 +1962,7 @@
             imageInput.value = "";
             selectedFiles.textContent = "";
             sendButton.disabled = true;
+            abortRequested = false;
 
             try {
                 let res;
@@ -1152,6 +1998,23 @@
                 await loadMessages();
             } catch (err) {
                 console.error("Submit failed:", err);
+            }
+        });
+
+        abortTaskButton.addEventListener("click", async () => {
+            abortRequested = true;
+            abortTaskButton.disabled = true;
+
+            try {
+                const res = await fetch("/abort", { method: "POST" });
+                if (!res.ok) {
+                    const err = await res.text();
+                    console.error(err);
+                }
+                await loadMessages();
+            } catch (err) {
+                console.error("Abort failed:", err);
+                await loadMessages();
             }
         });
 
@@ -1202,12 +2065,178 @@
             }
         });
 
+        workflowEditorButton.addEventListener("click", async () => {
+            try {
+                await loadWorkflows();
+                if (!currentWorkflow && workflowSummaries.length > 0) {
+                    await loadWorkflowDetail(workflowSummaries[0].id);
+                }
+                workflowModal.hidden = false;
+            } catch (err) {
+                console.error("Could not open workflow editor:", err);
+            }
+        });
+
         closeHelpButton.addEventListener("click", () => {
             helpModal.hidden = true;
         });
 
         closeContextButton.addEventListener("click", () => {
             contextModal.hidden = true;
+        });
+
+        closeWorkflowEditorButton.addEventListener("click", () => {
+            workflowModal.hidden = true;
+        });
+
+        workflowIdInput.addEventListener("input", () => {
+            if (!currentWorkflow || !workflowEditable()) return;
+            currentWorkflow.id = workflowIdInput.value.trim();
+            renderWorkflowErrors();
+            renderWorkflowList();
+        });
+
+        workflowNameInput.addEventListener("input", () => {
+            if (!currentWorkflow || !workflowEditable()) return;
+            currentWorkflow.name = workflowNameInput.value;
+            renderWorkflowErrors();
+            renderWorkflowList();
+        });
+
+        workflowDescriptionInput.addEventListener("input", () => {
+            if (!currentWorkflow || !workflowEditable()) return;
+            currentWorkflow.description = workflowDescriptionInput.value;
+            renderWorkflowErrors();
+        });
+
+        newWorkflowButton.addEventListener("click", () => {
+            currentWorkflow = emptyWorkflow();
+            selectedWorkflowMeta = { editable: true, source: "custom" };
+            selectedNodePath = [0];
+            renderWorkflowEditor();
+        });
+
+        cloneWorkflowButton.addEventListener("click", async () => {
+            if (!currentWorkflow) return;
+            try {
+                const res = await fetch("/workflows/" + encodeURIComponent(currentWorkflow.id) + "/clone", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({})
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || "Clone failed");
+                await loadWorkflows();
+                await loadWorkflowDetail(data.workflow.id);
+            } catch (err) {
+                workflowErrors.textContent = err.message;
+            }
+        });
+
+        importWorkflowButton.addEventListener("click", () => workflowImportFile.click());
+
+        workflowImportFile.addEventListener("change", async () => {
+            const file = workflowImportFile.files && workflowImportFile.files[0];
+            if (!file) return;
+            try {
+                const text = await file.text();
+                const workflow = JSON.parse(text);
+                const res = await fetch("/workflows/import", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ workflow })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || "Import failed");
+                await loadWorkflows();
+                await loadWorkflowDetail(data.workflow.id);
+            } catch (err) {
+                workflowErrors.textContent = err.message;
+            } finally {
+                workflowImportFile.value = "";
+            }
+        });
+
+        addWorkflowStepButton.addEventListener("click", addWorkflowStepToCurrent);
+        addWorkflowLoopButton.addEventListener("click", addWorkflowLoopToCurrent);
+        deleteWorkflowNodeButton.addEventListener("click", deleteWorkflowNode);
+        moveWorkflowNodeUpButton.addEventListener("click", () => moveWorkflowNode(-1));
+        moveWorkflowNodeDownButton.addEventListener("click", () => moveWorkflowNode(1));
+
+        saveWorkflowButton.addEventListener("click", async () => {
+            if (!currentWorkflow || !workflowEditable()) return;
+            const errors = validateWorkflowClient(currentWorkflow);
+            if (errors.length) {
+                workflowErrors.textContent = errors.join("\n");
+                return;
+            }
+            const originalId = selectedWorkflowMeta && selectedWorkflowMeta.id;
+            const method = originalId && selectedWorkflowMeta.editable ? "PUT" : "POST";
+            const url = method === "PUT"
+                ? "/workflows/" + encodeURIComponent(originalId)
+                : "/workflows";
+            try {
+                const res = await fetch(url, {
+                    method,
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ workflow: currentWorkflow })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || "Save failed");
+                await loadWorkflows();
+                await loadWorkflowDetail(data.workflow.id);
+            } catch (err) {
+                workflowErrors.textContent = err.message;
+            }
+        });
+
+        deleteWorkflowButton.addEventListener("click", async () => {
+            if (!currentWorkflow || !workflowEditable()) return;
+            if (!confirm("Delete workflow " + currentWorkflow.id + "?")) return;
+            try {
+                const res = await fetch("/workflows/" + encodeURIComponent(currentWorkflow.id), { method: "DELETE" });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || "Delete failed");
+                currentWorkflow = null;
+                selectedWorkflowMeta = null;
+                selectedNodePath = null;
+                await loadWorkflows();
+                if (workflowSummaries.length > 0) await loadWorkflowDetail(workflowSummaries[0].id);
+                else renderWorkflowEditor();
+            } catch (err) {
+                workflowErrors.textContent = err.message;
+            }
+        });
+
+        exportWorkflowButton.addEventListener("click", () => {
+            if (!currentWorkflow) return;
+            window.open("/workflows/" + encodeURIComponent(currentWorkflow.id) + "/export", "_blank");
+        });
+
+        workflowCanvas.addEventListener("click", () => {
+            selectedNodePath = null;
+            renderWorkflowEditor();
+        });
+
+        workflowCanvasWrap.addEventListener("scroll", scheduleWorkflowConnectorRedraw);
+
+        document.addEventListener("mousemove", (e) => {
+            if (!draggedNodePath) return;
+            const node = workflowCanvas.querySelector('[data-path="' + pathKey(draggedNodePath) + '"]');
+            if (!node) return;
+            const rect = workflowCanvas.getBoundingClientRect();
+            const x = Math.max(0, e.clientX - rect.left - dragOffset.x);
+            const y = Math.max(50, e.clientY - rect.top - dragOffset.y);
+            node.style.left = x + "px";
+            node.style.top = y + "px";
+            if (currentWorkflow) {
+                workflowNodePositions.set(currentWorkflow.id + ":" + pathKey(draggedNodePath), { x, y });
+            }
+            scheduleWorkflowConnectorRedraw();
+        });
+
+        document.addEventListener("mouseup", () => {
+            draggedNodePath = null;
         });
 
         saveContextButton.addEventListener("click", async () => {
@@ -1265,10 +2294,17 @@
             }
         });
 
+        workflowModal.addEventListener("click", (e) => {
+            if (e.target === workflowModal) {
+                workflowModal.hidden = true;
+            }
+        });
+
         document.addEventListener("keydown", (e) => {
             if (e.key === "Escape") {
                 helpModal.hidden = true;
                 contextModal.hidden = true;
+                workflowModal.hidden = true;
             }
         });
 

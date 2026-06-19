@@ -19,12 +19,19 @@ from agent_workflows import (
     WorkflowRun,
     WorkflowRunner,
     WorkflowStep,
+    clone_workflow,
+    delete_custom_workflow,
     evaluate_condition,
     get_workflow,
+    load_custom_workflows,
     parse_step_result,
+    save_custom_workflow,
     validate_workflow,
+    workflow_from_dict,
     workflow_status,
     workflow_options,
+    workflow_options_for_workdir,
+    workflow_to_dict,
 )
 
 
@@ -129,6 +136,17 @@ class FakeAgent:
             self._tmpdir = None
 
 
+class CancelAfterFirstAgent(FakeAgent):
+    def __init__(self):
+        super().__init__()
+        self.cancel_after_first = False
+
+    def run_agentic_task(self, task, **kwargs):
+        result = super().run_agentic_task(task, **kwargs)
+        self.cancel_after_first = True
+        return result
+
+
 class AgentWorkflowTests(unittest.TestCase):
     def test_workflow_catalog_has_expected_v1_workflows(self):
         ids = {item["id"] for item in workflow_options()}
@@ -185,6 +203,83 @@ class AgentWorkflowTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             validate_workflow(workflow)
+
+    def test_validate_rejects_invalid_role(self):
+        workflow = WorkflowDefinition(
+            id="bad_role",
+            name="Bad role",
+            description="",
+            steps=[WorkflowStep("step", role="bad")],
+        )
+
+        with self.assertRaises(ValueError):
+            validate_workflow(workflow)
+
+    def test_validate_rejects_reserved_builtin_id(self):
+        workflow = WorkflowDefinition(
+            id="code_task",
+            name="Bad",
+            description="",
+            steps=[WorkflowStep("step")],
+        )
+
+        with self.assertRaises(ValueError):
+            validate_workflow(workflow, reserved_ids={"code_task"})
+
+    def test_workflow_serialization_round_trips_loop(self):
+        workflow = WorkflowDefinition(
+            id="custom",
+            name="Custom",
+            description="",
+            steps=[
+                WorkflowLoop(
+                    "loop",
+                    until='check.status == "passed"',
+                    max_iterations=2,
+                    steps=[WorkflowStep("check", role="coding")],
+                )
+            ],
+        )
+
+        restored = workflow_from_dict(workflow_to_dict(workflow))
+
+        self.assertEqual(restored.id, "custom")
+        self.assertIsInstance(restored.steps[0], WorkflowLoop)
+        self.assertEqual(restored.steps[0].steps[0].role, "coding")
+
+    def test_custom_workflow_persistence_and_options(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self.assertEqual(load_custom_workflows(tmpdir), [])
+            workflow = WorkflowDefinition(
+                id="custom",
+                name="Custom",
+                description="Saved workflow",
+                steps=[WorkflowStep("step", role="planner")],
+            )
+
+            save_custom_workflow(tmpdir, workflow)
+            loaded = load_custom_workflows(tmpdir)
+            options = workflow_options_for_workdir(tmpdir)
+
+            self.assertEqual(loaded[0].id, "custom")
+            self.assertTrue(any(option["id"] == "custom" and option["editable"] for option in options))
+            self.assertIsNotNone(get_workflow("custom", tmpdir))
+
+    def test_invalid_custom_workflow_file_is_ignored(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with open(os.path.join(tmpdir, ".agent_workflows.json"), "w", encoding="utf-8") as f:
+                f.write("{not json")
+
+            self.assertEqual(load_custom_workflows(tmpdir), [])
+
+    def test_clone_and_delete_custom_workflow(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cloned = clone_workflow(tmpdir, "code_task", new_id="code_clone", new_name="Code clone")
+
+            self.assertEqual(cloned.id, "code_clone")
+            self.assertIsNotNone(get_workflow("code_clone", tmpdir))
+            self.assertTrue(delete_custom_workflow(tmpdir, "code_clone"))
+            self.assertIsNone(get_workflow("code_clone", tmpdir))
 
     def test_non_json_step_result_needs_changes_by_default(self):
         result = parse_step_result("check", "Contents of a file without structured status")
@@ -337,6 +432,46 @@ class AgentWorkflowTests(unittest.TestCase):
 
         self.assertEqual(agent.agentic_calls[0][2].get("max_iterations"), 3)
         self.assertTrue(agent.agentic_calls[0][2].get("require_structured_result"))
+
+    def test_workflow_stops_before_next_step_when_cancelled(self):
+        workflow = WorkflowDefinition(
+            id="test",
+            name="Test",
+            description="",
+            steps=[
+                WorkflowStep("first", role="coding", prompt="First"),
+                WorkflowStep("second", role="coding", prompt="Second"),
+            ],
+        )
+        agent = CancelAfterFirstAgent()
+        self.addCleanup(agent.cleanup)
+        runner = WorkflowRunner(agent)
+
+        summary = runner.run(
+            workflow,
+            "do work",
+            cancel_checker=lambda: agent.cancel_after_first,
+        )
+
+        self.assertIn("cancelled", summary)
+        self.assertEqual(len(agent.agentic_calls), 1)
+
+    def test_step_progress_callback_adds_workflow_step_metadata(self):
+        agent = FakeAgent()
+        self.addCleanup(agent.cleanup)
+        runner = WorkflowRunner(agent)
+        events = []
+        callback = runner.step_progress_callback(
+            events.append,
+            WorkflowStep("check", role="coding"),
+            loop_iteration=2,
+        )
+
+        callback({"kind": "status", "iteration": 1, "text": "Working"})
+
+        self.assertEqual(events[0]["workflow_step"], "check")
+        self.assertEqual(events[0]["workflow_step_label"], "check #2")
+        self.assertEqual(events[0]["workflow_loop_iteration"], 2)
 
 
 if __name__ == "__main__":

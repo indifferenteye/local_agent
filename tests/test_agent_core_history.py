@@ -162,6 +162,21 @@ class HistoryCompactionTests(unittest.TestCase):
         self.assertEqual(agent.query_image_paths[0], [])
         self.assertIn("shot.png", agent.query_image_paths[1])
 
+    def test_run_agentic_task_stops_before_first_iteration_when_cancelled(self):
+        class CancelledAgent(OllamaAgent):
+            def query_ollama(self, prompt, **kwargs):
+                raise AssertionError("query_ollama should not be called after cancellation")
+
+        agent = CancelledAgent()
+
+        result = agent.run_agentic_task(
+            "do work",
+            progress_callback=lambda event: None,
+            cancel_checker=lambda: True,
+        )
+
+        self.assertEqual(result, "Task aborted.")
+
 
 if __name__ == "__main__":
     unittest.main()

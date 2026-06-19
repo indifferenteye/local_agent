@@ -14,6 +14,9 @@ def normalize_progress_event(event: Any) -> Dict[str, Any]:
             "kind": str(event.get("kind", "progress")),
             "iteration": event.get("iteration"),
             "action": event.get("action"),
+            "workflow_step": event.get("workflow_step"),
+            "workflow_step_label": event.get("workflow_step_label"),
+            "workflow_loop_iteration": event.get("workflow_loop_iteration"),
             "text": str(event.get("text", "")),
             "timestamp": datetime.now().isoformat(timespec="seconds"),
         }
@@ -23,6 +26,9 @@ def normalize_progress_event(event: Any) -> Dict[str, Any]:
         "kind": "progress",
         "iteration": None,
         "action": None,
+        "workflow_step": None,
+        "workflow_step_label": None,
+        "workflow_loop_iteration": None,
         "text": str(event),
         "timestamp": datetime.now().isoformat(timespec="seconds"),
     }

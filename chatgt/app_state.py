@@ -100,3 +100,4 @@ def update_routing_settings(data: Dict[str, Any]) -> None:
 messages: List[Dict[str, Any]] = []
 subscribers: List[queue.Queue] = []
 running = False
+cancel_event: threading.Event | None = None

@@ -15,8 +15,16 @@ from memory import maybe_summarize_memory, prepare_context_for_next_task
 from persistence import load_memory_state, save_memory_state, save_messages, save_settings
 from agent_workflows import (
     WorkflowRunner,
+    built_in_workflow_ids,
+    clone_workflow,
+    delete_custom_workflow,
     get_workflow,
-    workflow_options,
+    get_workflow_detail,
+    save_custom_workflow,
+    workflow_from_dict,
+    workflow_options_for_workdir,
+    workflow_to_dict,
+    workflow_validation_errors,
 )
 
 
@@ -33,10 +41,15 @@ def register_routes(app) -> None:
             images=[image_message_data(path) for path in task_images or []],
         )
         state.running = True
+        cancel_event = threading.Event()
+        state.cancel_event = cancel_event
 
         def worker():
             try:
                 with state.agent_lock:
+                    def is_cancelled() -> bool:
+                        return cancel_event.is_set()
+
                     def progress(event: Any) -> None:
                         broadcast_message(normalize_progress_event(event))
 
@@ -54,13 +67,15 @@ def register_routes(app) -> None:
                     }))
 
                     if workflow_id:
-                        workflow = get_workflow(workflow_id)
+                        workflow = get_workflow(workflow_id, state.agent.working_dir)
+                        workflow_detail = get_workflow_detail(workflow_id, state.agent.working_dir)
                         if workflow is None:
                             final = f"Unknown workflow: {workflow_id}"
                         else:
+                            source = (workflow_detail or {}).get("source", "unknown")
                             broadcast_message(normalize_progress_event({
                                 "kind": "status",
-                                "text": f"Workflow selected: {workflow.name}",
+                                "text": f"Workflow selected: {workflow.name} ({source})",
                             }))
                             runner = WorkflowRunner(state.agent)
                             final = runner.run(
@@ -69,6 +84,7 @@ def register_routes(app) -> None:
                                 progress_callback=progress,
                                 conversation_context=conversation_context,
                                 task_images=task_images or [],
+                                cancel_checker=is_cancelled,
                             )
                     else:
                         routing_decision = state.agent.route_current_task(
@@ -100,13 +116,20 @@ def register_routes(app) -> None:
                             task_images=task_images or [],
                             selected_model=routing_decision.selected_model,
                             routing_decision=routing_decision,
+                            cancel_checker=is_cancelled,
                         )
+                    if is_cancelled():
+                        final = "Task aborted."
+
                     broadcast("agent", final, images=state.agent.consume_output_images())
 
-                    maybe_summarize_memory()
+                    if not is_cancelled():
+                        maybe_summarize_memory()
 
             finally:
                 state.running = False
+                if state.cancel_event is cancel_event:
+                    state.cancel_event = None
                 broadcast("status", "idle")
 
         thread = threading.Thread(target=worker, daemon=True)
@@ -147,8 +170,112 @@ def register_routes(app) -> None:
     @app.route("/workflows")
     def get_workflows():
         return jsonify({
-            "workflows": workflow_options(),
+            "workflows": workflow_options_for_workdir(state.agent.working_dir),
         })
+
+    def workflow_error(message: str, status: int = 400):
+        return jsonify({"error": message, "errors": [message]}), status
+
+    def workflow_from_request():
+        data = request.get_json(force=True)
+        workflow_data = data.get("workflow", data) if isinstance(data, dict) else {}
+        if not isinstance(workflow_data, dict):
+            raise ValueError("Workflow payload must be an object")
+        return workflow_from_dict(workflow_data)
+
+    @app.route("/workflows/<workflow_id>")
+    def get_workflow_api(workflow_id: str):
+        detail = get_workflow_detail(workflow_id, state.agent.working_dir)
+        if detail is None:
+            return workflow_error(f"Unknown workflow: {workflow_id}", 404)
+        return jsonify({"workflow": detail})
+
+    @app.route("/workflows", methods=["POST"])
+    def create_workflow_api():
+        if state.running:
+            return workflow_error("Cannot change workflows while a task is running", 409)
+        try:
+            workflow = workflow_from_request()
+            errors = workflow_validation_errors(workflow, reserved_ids=built_in_workflow_ids())
+            if errors:
+                return jsonify({"error": errors[0], "errors": errors}), 400
+            saved = save_custom_workflow(state.agent.working_dir, workflow)
+            return jsonify({"workflow": {**workflow_to_dict(saved), "editable": True, "source": "custom"}})
+        except ValueError as exc:
+            return workflow_error(str(exc), 400)
+
+    @app.route("/workflows/<workflow_id>", methods=["PUT"])
+    def update_workflow_api(workflow_id: str):
+        if state.running:
+            return workflow_error("Cannot change workflows while a task is running", 409)
+        if workflow_id in built_in_workflow_ids():
+            return workflow_error(f"Cannot update built-in workflow: {workflow_id}", 400)
+        try:
+            workflow = workflow_from_request()
+            errors = workflow_validation_errors(workflow, reserved_ids=built_in_workflow_ids())
+            if errors:
+                return jsonify({"error": errors[0], "errors": errors}), 400
+            saved = save_custom_workflow(state.agent.working_dir, workflow, replacing_id=workflow_id)
+            return jsonify({"workflow": {**workflow_to_dict(saved), "editable": True, "source": "custom"}})
+        except ValueError as exc:
+            return workflow_error(str(exc), 400)
+
+    @app.route("/workflows/<workflow_id>", methods=["DELETE"])
+    def delete_workflow_api(workflow_id: str):
+        if state.running:
+            return workflow_error("Cannot change workflows while a task is running", 409)
+        if workflow_id in built_in_workflow_ids():
+            return workflow_error(f"Cannot delete built-in workflow: {workflow_id}", 400)
+        if not delete_custom_workflow(state.agent.working_dir, workflow_id):
+            return workflow_error(f"Unknown custom workflow: {workflow_id}", 404)
+        return jsonify({"deleted": True})
+
+    @app.route("/workflows/<workflow_id>/clone", methods=["POST"])
+    def clone_workflow_api(workflow_id: str):
+        if state.running:
+            return workflow_error("Cannot change workflows while a task is running", 409)
+        data = request.get_json(silent=True) or {}
+        try:
+            cloned = clone_workflow(
+                state.agent.working_dir,
+                workflow_id,
+                new_id=str(data.get("id", "") or "").strip() or None,
+                new_name=str(data.get("name", "") or "").strip() or None,
+            )
+            return jsonify({"workflow": {**workflow_to_dict(cloned), "editable": True, "source": "custom"}})
+        except ValueError as exc:
+            return workflow_error(str(exc), 400)
+
+    @app.route("/workflows/import", methods=["POST"])
+    def import_workflow_api():
+        if state.running:
+            return workflow_error("Cannot change workflows while a task is running", 409)
+        try:
+            workflow = workflow_from_request()
+            errors = workflow_validation_errors(workflow, reserved_ids=built_in_workflow_ids())
+            if errors:
+                return jsonify({"error": errors[0], "errors": errors}), 400
+            saved = save_custom_workflow(state.agent.working_dir, workflow)
+            return jsonify({"workflow": {**workflow_to_dict(saved), "editable": True, "source": "custom"}})
+        except ValueError as exc:
+            return workflow_error(str(exc), 400)
+
+    @app.route("/workflows/<workflow_id>/export")
+    def export_workflow_api(workflow_id: str):
+        detail = get_workflow_detail(workflow_id, state.agent.working_dir)
+        if detail is None:
+            return workflow_error(f"Unknown workflow: {workflow_id}", 404)
+        export_data = {
+            key: value for key, value in detail.items()
+            if key not in {"editable", "source"}
+        }
+        return Response(
+            json.dumps(export_data, indent=2) + "\n",
+            mimetype="application/json",
+            headers={
+                "Content-Disposition": f"attachment; filename={workflow_id}.workflow.json",
+            },
+        )
 
     @app.route("/model", methods=["POST"])
     def set_model():
@@ -310,6 +437,20 @@ def register_routes(app) -> None:
         start_agent_task(task, workflow_id=workflow_id)
 
         return jsonify({"started": True})
+
+    @app.route("/abort", methods=["POST"])
+    def abort_task():
+        if not state.running or state.cancel_event is None:
+            return jsonify({"aborted": False, "running": False})
+
+        state.cancel_event.set()
+        broadcast_message(normalize_progress_event({
+            "kind": "status",
+            "text": "Abort requested. Stopping at the next safe checkpoint...",
+        }))
+        broadcast("status", "abort requested")
+
+        return jsonify({"aborted": True, "running": True})
 
     @app.route("/clear", methods=["POST"])
     def clear_messages():
